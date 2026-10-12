@@ -1,11 +1,11 @@
-ANIMATED STREET CUTOUTS
+MILL MARKET LAYERED STREET
 
-Open Mill_Market_Animated_Doors.blend. Space plays frames 1–240.
-Frame 1: closed. Frame 90: open.
-Old Poodle and Motel doors swing outward, reversed from the previous scene.
-Both have solid 10 cm door leaves, softened edges, matching cutouts, and recessed jambs.
-Mill Market stays closed.
-Only the 10 ground-floor glass groups have a muted warm amber gradient at the bottom.
-The 13 upstairs glass groups use their original blue artwork, with no added gradient or shine.
-All textures are packed into the Blender file.
-The game background has not been replaced; these are editable Blender assets.
+Both doors use left hinges and open outward 110 degrees.
+Independent painted front/back/edge materials prevent stretched glass on timber edges.
+Muted ochre and lavender interior colors are darker than the wall paint.
+Street-level glass has brighter warm bottoms; upstairs glass has moving cloud reflections.
+The market canopy is a separate foreground layer.
+All Blender textures are packed.
+Godot asset and masks: assets/backgrounds/mill_market_layers
+Godot scene: scenes/mill_market_layers.tscn
+Integrated into the game for the mill1 background. See the asset README for animation/effect APIs.

@@ -30628,6 +30628,7 @@ func _build_outdoor_street() -> void:
 	backdrop.sorting_offset = -20.0
 	outdoor.add_child(backdrop)
 	street_matte = backdrop
+	_sync_mill_market_layers(bg_path)
 
 	## Thin wall on the paint — stops ragdolls / bodies clipping behind it.
 	## Bullet / laser rays exclude STREET_MATTE_COLLISION_LAYER so shots pass through.
@@ -61629,6 +61630,7 @@ func _apply_street_background_texture() -> void:
 	if tex == null:
 		return
 	mat.albedo_texture = tex
+	_sync_mill_market_layers(_current_street_background_path())
 func _apply_street_matte_settings(s: Dictionary) -> void:
 	if street_matte == null or not is_instance_valid(street_matte):
 		return
@@ -81469,3 +81471,37 @@ func mp_truck_arena_jump(serial: int) -> void:
 	if not NetManager.is_host() or not is_instance_valid(_pal_ball_break) or _pal_ball_break.generation != serial: return
 	if _pal_ball_break.simulation.has_method("jump_for"):
 		_pal_ball_break.simulation.jump_for(multiplayer.get_remote_sender_id())
+
+
+func _sync_mill_market_layers(background_path: String) -> void:
+	if not is_instance_valid(street_matte): return
+	var layered := street_matte.get_node_or_null("MillMarketLayers") as Node3D
+	if background_path == STREET_BG_MILL1_PATH:
+		if layered == null:
+			layered = preload("res://scenes/mill_market_layers.tscn").instantiate() as Node3D
+			layered.name = "MillMarketLayers"
+			layered.scale = Vector3(STREET_MATTE_BASE_SIZE.x / 20.48, STREET_MATTE_BASE_SIZE.y / 11.53, 1.0)
+			street_matte.add_child(layered)
+			layered.configure_for_game(self)
+		street_matte.mesh = null
+		var original_material := street_matte.material_override as StandardMaterial3D
+		if original_material != null: original_material.albedo_texture = null
+	else:
+		if layered != null:
+			street_matte.remove_child(layered)
+			layered.queue_free()
+		if street_matte.mesh == null:
+			var quad := QuadMesh.new()
+			quad.size = STREET_MATTE_BASE_SIZE
+			street_matte.mesh = quad
+
+func get_street_effect_mask(region: String) -> Texture2D:
+	if not is_instance_valid(street_matte): return null
+	var layered := street_matte.get_node_or_null("MillMarketLayers")
+	return layered.get_effect_mask(region) if layered != null else null
+
+func play_street_door_animation(animation_name: String) -> void:
+	if not is_instance_valid(street_matte): return
+	var layered := street_matte.get_node_or_null("MillMarketLayers")
+	if layered != null and layered.door_animations.has_animation(animation_name):
+		layered.door_animations.play(animation_name)

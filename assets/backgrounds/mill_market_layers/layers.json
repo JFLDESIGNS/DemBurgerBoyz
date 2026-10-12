@@ -1,0 +1,318 @@
+{
+  "resolution": [
+    4778,
+    2689
+  ],
+  "world_size": [
+    20.48,
+    11.53
+  ],
+  "front_axis": "+Z",
+  "canopy_depth": 0.65,
+  "walker_depth_range": [
+    0.15,
+    0.55
+  ],
+  "windows": [
+    {
+      "name": "Records_Upper_Left",
+      "upper": true,
+      "door_glass": false,
+      "pixel_rect": [
+        522,
+        1245,
+        142,
+        272
+      ],
+      "mask": "Records_Upper_Left_mask.png"
+    },
+    {
+      "name": "Records_Upper_Right",
+      "upper": true,
+      "door_glass": false,
+      "pixel_rect": [
+        842,
+        1231,
+        114,
+        291
+      ],
+      "mask": "Records_Upper_Right_mask.png"
+    },
+    {
+      "name": "Records_Display",
+      "upper": false,
+      "door_glass": false,
+      "pixel_rect": [
+        433,
+        1716,
+        411,
+        422
+      ],
+      "mask": "Records_Display_mask.png"
+    },
+    {
+      "name": "Market_Upper_Wide",
+      "upper": true,
+      "door_glass": false,
+      "pixel_rect": [
+        1306,
+        1264,
+        361,
+        237
+      ],
+      "mask": "Market_Upper_Wide_mask.png"
+    },
+    {
+      "name": "Market_Upper_Narrow",
+      "upper": true,
+      "door_glass": false,
+      "pixel_rect": [
+        1805,
+        1240,
+        89,
+        235
+      ],
+      "mask": "Market_Upper_Narrow_mask.png"
+    },
+    {
+      "name": "Market_Display",
+      "upper": false,
+      "door_glass": false,
+      "pixel_rect": [
+        1474,
+        1812,
+        476,
+        365
+      ],
+      "mask": "Market_Display_mask.png"
+    },
+    {
+      "name": "Poodle_Upper_Left",
+      "upper": true,
+      "door_glass": false,
+      "pixel_rect": [
+        2169,
+        1280,
+        159,
+        205
+      ],
+      "mask": "Poodle_Upper_Left_mask.png"
+    },
+    {
+      "name": "Poodle_Upper_Right",
+      "upper": true,
+      "door_glass": false,
+      "pixel_rect": [
+        2582,
+        1266,
+        126,
+        230
+      ],
+      "mask": "Poodle_Upper_Right_mask.png"
+    },
+    {
+      "name": "Poodle_Display_Left",
+      "upper": false,
+      "door_glass": false,
+      "pixel_rect": [
+        2048,
+        1767,
+        308,
+        254
+      ],
+      "mask": "Poodle_Display_Left_mask.png"
+    },
+    {
+      "name": "Poodle_Door_Glass",
+      "upper": false,
+      "door_glass": true,
+      "pixel_rect": [
+        2409,
+        1777,
+        175,
+        263
+      ],
+      "mask": "Poodle_Door_Glass_mask.png"
+    },
+    {
+      "name": "Poodle_Display_Right",
+      "upper": false,
+      "door_glass": false,
+      "pixel_rect": [
+        2650,
+        1742,
+        237,
+        275
+      ],
+      "mask": "Poodle_Display_Right_mask.png"
+    },
+    {
+      "name": "Motel_Top_Left",
+      "upper": true,
+      "door_glass": false,
+      "pixel_rect": [
+        3093,
+        841,
+        235,
+        247
+      ],
+      "mask": "Motel_Top_Left_mask.png"
+    },
+    {
+      "name": "Motel_Top_Right",
+      "upper": true,
+      "door_glass": false,
+      "pixel_rect": [
+        3429,
+        816,
+        233,
+        275
+      ],
+      "mask": "Motel_Top_Right_mask.png"
+    },
+    {
+      "name": "Motel_Middle_Left",
+      "upper": true,
+      "door_glass": false,
+      "pixel_rect": [
+        3135,
+        1205,
+        175,
+        228
+      ],
+      "mask": "Motel_Middle_Left_mask.png"
+    },
+    {
+      "name": "Motel_Middle_Right",
+      "upper": true,
+      "door_glass": false,
+      "pixel_rect": [
+        3476,
+        1208,
+        198,
+        218
+      ],
+      "mask": "Motel_Middle_Right_mask.png"
+    },
+    {
+      "name": "Motel_Lower_Left",
+      "upper": false,
+      "door_glass": false,
+      "pixel_rect": [
+        3123,
+        1816,
+        105,
+        375
+      ],
+      "mask": "Motel_Lower_Left_mask.png"
+    },
+    {
+      "name": "Motel_Door",
+      "upper": false,
+      "door_glass": true,
+      "pixel_rect": [
+        3305,
+        1856,
+        161,
+        177
+      ],
+      "mask": "Motel_Door_mask.png"
+    },
+    {
+      "name": "Motel_Transom",
+      "upper": false,
+      "door_glass": false,
+      "pixel_rect": [
+        3324,
+        1791,
+        112,
+        27
+      ],
+      "mask": "Motel_Transom_mask.png"
+    },
+    {
+      "name": "Motel_Lower_Right",
+      "upper": false,
+      "door_glass": false,
+      "pixel_rect": [
+        3578,
+        1807,
+        86,
+        375
+      ],
+      "mask": "Motel_Lower_Right_mask.png"
+    },
+    {
+      "name": "Cafe_Upper_Left",
+      "upper": true,
+      "door_glass": false,
+      "pixel_rect": [
+        3826,
+        1371,
+        142,
+        207
+      ],
+      "mask": "Cafe_Upper_Left_mask.png"
+    },
+    {
+      "name": "Cafe_Upper_Middle",
+      "upper": true,
+      "door_glass": false,
+      "pixel_rect": [
+        4092,
+        1359,
+        160,
+        212
+      ],
+      "mask": "Cafe_Upper_Middle_mask.png"
+    },
+    {
+      "name": "Cafe_Upper_Right",
+      "upper": true,
+      "door_glass": false,
+      "pixel_rect": [
+        4295,
+        1343,
+        95,
+        209
+      ],
+      "mask": "Cafe_Upper_Right_mask.png"
+    },
+    {
+      "name": "Cafe_Display",
+      "upper": false,
+      "door_glass": false,
+      "pixel_rect": [
+        4078,
+        1842,
+        310,
+        298
+      ],
+      "mask": "Cafe_Display_mask.png"
+    }
+  ],
+  "doors": [
+    {
+      "name": "Old_Poodle_Door",
+      "hinge": "Old_Poodle_Door_HINGE",
+      "axis_gltf": [
+        0.028559774160385132,
+        0.0,
+        -0.9995920658111572
+      ],
+      "direction": -1,
+      "open_degrees": 110
+    },
+    {
+      "name": "Motel_Door",
+      "hinge": "Motel_Door_HINGE",
+      "axis_gltf": [
+        -0.030520092695951462,
+        0.0,
+        -0.9995341300964355
+      ],
+      "direction": -1,
+      "open_degrees": 110
+    }
+  ]
+}
