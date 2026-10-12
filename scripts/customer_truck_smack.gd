@@ -17,8 +17,8 @@ func setup(owner_game: Node,person: Node3D,origin: Vector3) -> void:
  actor._eating=false;actor._burger_eat_phase="";actor._cat_pet_left=0.0
  actor.global_position=home
  # The camera faces +Z: negative X is screen right. Route around the queue.
- contact=Vector3(-1.55,home.y,1.65)
- route.assign([Vector3(-9.2,home.y,home.z),Vector3(-9.2,home.y,3.1),Vector3(-3.6,home.y,3.1),contact])
+ contact=Vector3(-1.55,actor.STAND_Y,1.20)
+ route.assign([Vector3(-9.2,home.y,home.z),Vector3(-9.2,actor.STAND_Y,actor.WAIT_Z),Vector3(contact.x,actor.STAND_Y,actor.WAIT_Z),contact])
  if not actor._anim_player.has_animation("burger/Truck_Smack"):
   actor._burger_props=preload("res://scripts/burger_animation_library.gd").attach(actor._anim_player,actor._anim_player.get_parent())
  actor.play_street_rejection(true)
@@ -52,7 +52,7 @@ func _process(delta: float) -> void:
    if is_instance_valid(game.game_audio):game.game_audio.play_truck_knock(1.0)
   if age>=1.4:
    phase="escape";route_index=0
-   route.assign([Vector3(-4.2,home.y,2.5),Vector3(-9.2,home.y,4.0)])
+   route.assign([Vector3(contact.x,actor.STAND_Y,20.0)])
    actor._anim_player.stop();actor._anim_player.clear_caches()
    actor.play_street_run(1.3)
 func finish() -> void:
@@ -64,6 +64,11 @@ func finish() -> void:
    var idx: int=game.bg_people.find(actor)
    if idx>=0:game.bg_people_active[idx]=false;game.bg_people_wait[idx]=8.0
   else:
-   actor.global_position=home;actor.rotation.y=home_yaw
-   actor._anim_state="";actor._play_anim("idle")
+   if hit:
+    actor.hide()
+    if not game.mp_enabled or NetManager.is_host():game._on_customer_left(actor,true)
+    actor.queue_free()
+   else:
+    actor.global_position=home;actor.rotation.y=home_yaw
+    actor._anim_state="";actor._play_anim("idle")
  queue_free()

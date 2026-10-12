@@ -1,9 +1,18 @@
 extends SceneTree
 func _initialize():call_deferred("run")
 func run():
+ create_timer(40).timeout.connect(func():quit(1))
  var g=load("res://scenes/main.tscn").instantiate();g.set_script(load("res://tests/delivery_network_fixture.gd"));root.add_child(g);current_scene=g
  var outside=Node3D.new();g.add_child(outside);g.playing=true
  g._build_background_people(outside)
+ g.day_time=g._shift_length()-180
+ assert(not g._grisaldi_arrival_due(),"No Grisaldi during the first three minutes")
+ g._start_background_person(0)
+ assert(not g.bg_people[0].get_meta("grisaldi",false))
+ for i in g.bg_people.size():
+  g.bg_people_active[i]=false;g.bg_people[i].visible=false
+ g.day_time=g._shift_length()-300
+
  g._start_background_person(0)
  assert(g.bg_people_active[0] and g.bg_people[0].get_meta("grisaldi",false))
  var walker=g.bg_people[0]
@@ -33,5 +42,5 @@ func run():
   g.bg_people_active[i]=false;g.bg_people[i].visible=false
  g._start_background_person(0)
  assert(g.bg_people[0].get_meta("grisaldi",false))
- print("OUTDOOR_FOOD_GRISALDI_OK outfit, hit reaction, all six locations within 1.1 seconds, no repeat, next day visit")
+ print("OUTDOOR_FOOD_GRISALDI_OK outfit, hit reaction, delayed appearance at all six locations, no repeat, next day visit")
  quit()

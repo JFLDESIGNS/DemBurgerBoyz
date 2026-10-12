@@ -2211,6 +2211,7 @@ var street_car_horn_this_pass: bool = false
 var street_car_preview: bool = false ## Parked center car while Hidden is open.
 var _street_car_model_cache: Array = []
 var _grisaldi_visits: Dictionary = {}
+var _grisaldi_arrival_times: Dictionary = {}
 var _vehicle_prewarm_done: bool = false
 var _vehicle_prewarm_running: bool = false
 var bg_people: Array = [] ## Customer street walkers
@@ -31321,7 +31322,7 @@ func _start_background_person(idx: int, as_partner: bool = false) -> void:
 	walker.set_meta("street_pair", 0)
 	walker.set_meta("crowd_home_z", _bg_people_z() + (BG_PEOPLE_PAIR_Z if as_partner else 0.0))
 	var preset: Dictionary = CustomerScript.take_next_saved_character_preset()
-	if not preset.is_empty() and not as_partner and not _grisaldi_visits.has("%s:%d" % [current_location_id,day]):
+	if not preset.is_empty() and not as_partner and _grisaldi_arrival_due() and not _grisaldi_visits.has("%s:%d" % [current_location_id,day]):
 		preset.merge({"grisaldi":true,"top_color":"ffffffff","shoe_color":"e52d35ff","top_style":16,"top_catalog_version":1,"bottom_style":2,"bottom_catalog_version":1,"bottom_color":"244b32ff","hat_style":7,"hat_color":"ed2736ff","hair_style":18,"hair_scale":1.3,"hair_scale_xyz":[1,1,1],"hair_offset":[0,.54,0],"extra_hairs":[],"hair_color":"37291fff","facial_hair_style":2,"facial_hair_color":"37291fff","customer_voice":"male","glasses_style":0,"jewelry_style":0,"makeup_style":0,"shirt_graphic":0,"shoe_style":3,"hat_scale":1.0,"hat_offset":[0,.06,0],"hat_rotation":[0,0,0]},true)
 	if preset.is_empty():
 		bg_people_wait[idx] = 4.0
@@ -31509,7 +31510,7 @@ func _update_background_people(delta: float) -> void:
 	var z := _bg_people_z()
 	var y := _bg_people_y()
 	var s := _bg_people_scale()
-	if playing and not shift_paused and not options_menu_open and (not mp_enabled or NetManager.is_host()) and not _grisaldi_visits.has("%s:%d" % [current_location_id,day]):
+	if playing and not shift_paused and not options_menu_open and (not mp_enabled or NetManager.is_host()) and _grisaldi_arrival_due() and not _grisaldi_visits.has("%s:%d" % [current_location_id,day]):
 		for slot in bg_people.size():
 			if not bool(bg_people_active[slot]): bg_people_wait[slot]=minf(float(bg_people_wait[slot]),1.0)
 	var speed_mul := clampf(_gfx_float("bg_people_speed", 1.0), 0.25, 2.5)
@@ -81677,3 +81678,8 @@ func mp_cat_bird_attack_sound(impact: bool) -> void:
 	if not is_instance_valid(game_audio):return
 	if impact:game_audio.play_cat_cartoon_smack()
 	else:game_audio.play_build_whoosh()
+
+func _grisaldi_arrival_due() -> bool:
+	if not _grisaldi_arrival_times.has(day):
+		_grisaldi_arrival_times[day] = randf_range(195.0,270.0)
+	return _shift_length()-day_time >= float(_grisaldi_arrival_times[day])

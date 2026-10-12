@@ -3,7 +3,7 @@ func _initialize():call_deferred("run")
 func run():
  var game=load("res://scenes/main.tscn").instantiate();game.set_script(load("res://tests/delivery_network_fixture.gd"));root.add_child(game);current_scene=game
  game.get_node("UI").hide()
- var outside=Node3D.new();game.add_child(outside);game.playing=true
+ var outside=Node3D.new();game.add_child(outside);game.playing=true;game.day_time=game._shift_length()-300
  game._build_background_people(outside);game._start_background_person(0)
  var actor=game.bg_people[0];actor.position=Vector3.ZERO;actor.rotation_degrees.y=180;actor.scale=Vector3.ONE
  for i in range(1,game.bg_people.size()):game.bg_people[i].hide()

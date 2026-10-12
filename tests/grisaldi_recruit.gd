@@ -3,7 +3,7 @@ func _initialize():call_deferred("run")
 func run():
  create_timer(45).timeout.connect(func():quit(1))
  var g=load("res://scenes/main.tscn").instantiate();g.set_script(load("res://tests/hotdog_challenge_fixture.gd"));root.add_child(g);current_scene=g
- g.playing=true;g.day_time=300;g.stations=[{"items":[],"patties":[]}]
+ g.playing=true;g.day_time=g._shift_length()-300;g.stations=[{"items":[],"patties":[]}]
  var outside=Node3D.new();g.add_child(outside);g._build_background_people(outside);g._start_background_person(0)
  var actor=g.bg_people[0]
  var preset=actor.get_custom_character_preset()
