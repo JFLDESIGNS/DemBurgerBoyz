@@ -265,7 +265,7 @@ func _update_walker_reflections() -> void:
   var feet := _reflection_uv(reflection_origin,camera)
   var head := _reflection_uv(reflection_origin+Vector3.UP*height*1.3,camera)
   var side := _reflection_uv(reflection_origin+camera.global_basis.x*height*0.72,camera)
-  people.append(Vector4(feet.x,feet.y,maxf(absf(side.x-feet.x)*2.0,.001),maxf(feet.y-head.y,.001)))
+  people.append(Vector4(feet.x,feet.y,maxf(absf(side.x-feet.x)*1.4,.001),maxf(feet.y-head.y,.001)))
   gait.append(Time.get_ticks_msec()*0.001*(9.0 if bool(_game.bg_people_is_run[i]) else 5.0)+i)
   if people.size()==8: break
  var count := people.size()
