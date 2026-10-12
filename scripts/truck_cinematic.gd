@@ -5,7 +5,7 @@ signal departure_finished
 signal warmup_finished
 
 const TRUCK_SCENE = preload("res://assets/menu_truck/burger_pals_truck.glb")
-const DEPARTURE_SECONDS := 1.60
+const DEPARTURE_SECONDS := 1.45
 const MENU_FRAME_PADDING := Vector2(160.0, 64.0)
 const MENU_CAMERA_HEIGHT := 8.3
 var loading_mode := false
@@ -25,6 +25,7 @@ var camera_cuts := 0
 var departing := false
 var cat_leaving := false
 var menu_cat: Node3D
+var departure_curve: Curve3D
 var departure_elapsed := 0.0
 var _departure_rect := Rect2()
 var _departure_done := false
@@ -95,6 +96,7 @@ func _ready() -> void:
 	animation.play(clip)
 	animation.seek(0.0, true)
 	animation.pause()
+	_style_truck_details()
 	_body_rest = body.position
 	_burger_rest = burger.position
 	camera = Camera3D.new()
@@ -268,19 +270,21 @@ func _process(delta: float) -> void:
 
 func sample_departure(progress: float) -> void:
 	var u := clampf(progress,0.0,1.0)
-	var turn := clampf((u-.38)/.62,0.0,1.0)
-	var point: Vector3
+	if departure_curve == null:
+		departure_curve = Curve3D.new()
+		departure_curve.bake_interval = .025
+		departure_curve.add_point(Vector3(2.2,0,0), Vector3.ZERO, Vector3(2.8,0,0))
+		departure_curve.add_point(Vector3(6.3,0,4.4), Vector3(-1.5,0,-2.3), Vector3.ZERO)
+	var length := departure_curve.get_baked_length()
+	# Integrate a steadily increasing speed over path distance, avoiding a speed step at the turn.
+	var distance := (2.2 + length) * (.18 * u + .82 * u * u)
+	var turn := clampf((distance - 2.2) / length, 0.0, 1.0)
+	var point := Vector3(distance, 0, 0)
 	var tangent := Vector3.RIGHT
-	if u < .38:
-		point=Vector3(2.2*pow(u/.38,1.45),0,0)
-	else:
-		var t:=turn
-		var a:=Vector3(2.2,0,0)
-		var b:=Vector3(5.0,0,0)
-		var c:=Vector3(4.8,0,2.1)
-		var d:=Vector3(6.3,0,4.4)
-		point=a.bezier_interpolate(b,c,d,t)
-		tangent=3.0*(1-t)*(1-t)*(b-a)+6.0*(1-t)*t*(c-b)+3.0*t*t*(d-c)
+	if distance > 2.2:
+		var offset := distance - 2.2
+		point = departure_curve.sample_baked(offset, true)
+		tangent = departure_curve.sample_baked(minf(length, offset + .025), true) - departure_curve.sample_baked(maxf(0, offset - .025), true)
 	_departure_distance+=point.distance_to(_departure_last);_departure_last=point
 	truck.position=point;truck.rotation.y=-atan2(tangent.z,tangent.x)
 	body.rotation.z=.09*sin(turn*PI)
@@ -464,3 +468,52 @@ func _menu_pal_idle(pal: Node3D, index: int) -> void:
 	if pal._anim_player != null and pal._anim_player.has_animation("kenney/Idle"):
 		pal._anim_player.play("kenney/Idle")
 		pal._anim_player.seek(index * .7, true)
+
+
+func _style_truck_details() -> void:
+	var black := StandardMaterial3D.new()
+	black.albedo_color = Color("080A0D")
+	black.roughness = .95
+	var geometry := body.find_child("BodyLean_Geometry", true, false) as MeshInstance3D
+	for surface in geometry.mesh.get_surface_count():
+		var material := geometry.mesh.surface_get_material(surface)
+		if material != null and "wheel-well" in material.resource_name:
+			geometry.set_surface_override_material(surface, black)
+	for axle in [-2.75, 2.83]:
+		for side in [-1.0, 1.0]:
+			var arch := MeshInstance3D.new()
+			arch.name = "BlackWheelWell"
+			var surface := SurfaceTool.new()
+			surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+			for segment in 32:
+				var a := PI * segment / 32.0
+				var b := PI * (segment + 1) / 32.0
+				var vertices: Array[Vector3] = []
+				for pair in [Vector2(a,0),Vector2(a,1.02),Vector2(b,1.02),Vector2(b,0)]:
+					vertices.append(Vector3(axle + cos(pair.x)*pair.y, .86 - body.position.y + sin(pair.x)*pair.y, side*1.40))
+				for index in [0,1,2,0,2,3]: surface.add_vertex(vertices[index])
+			surface.generate_normals()
+			arch.mesh = surface.commit()
+			arch.material_override = black
+			black.cull_mode = BaseMaterial3D.CULL_DISABLED
+			body.add_child(arch)
+	var plate := MeshInstance3D.new()
+	plate.name = "PalsLicensePlate"
+	var shape := BoxMesh.new()
+	shape.size = Vector3(.075,.48,1.35)
+	plate.mesh = shape
+	plate.material_override = _material(Color("FFF0CB"))
+	plate.position = Vector3(4.59, .12, 0)
+	body.add_child(plate)
+	var lettering := Label3D.new()
+	lettering.name = "PalsPlateLettering"
+	lettering.text = "PALS"
+	lettering.font = preload("res://assets/fonts/Nunito-ExtraBold.ttf")
+	lettering.font_size = 100
+	lettering.pixel_size = .0032
+	lettering.modulate = Color("161C22")
+	lettering.outline_size = 0
+	lettering.position = Vector3(4.632,.12,0)
+	lettering.rotation.y = PI*.5
+	lettering.no_depth_test = false
+	body.add_child(lettering)

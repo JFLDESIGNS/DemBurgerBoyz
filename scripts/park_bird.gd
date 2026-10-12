@@ -97,7 +97,7 @@ func _ready() -> void:
 	for clip in [&"Idle", &"Fly"]:
 		animator.get_animation(clip).loop_mode = Animation.LOOP_LINEAR
 	_rng.randomize()
-	voice = _audio_player("Chirp", CHIRP, -5.0)
+	voice = _audio_player("Chirp", CHIRP, -5.0 + linear_to_db(.85))
 	# Keep the little bird audible from the cooking camera without distance muffling.
 	voice.attenuation_model = AudioStreamPlayer3D.ATTENUATION_DISABLED
 	voice.max_distance = 0.0

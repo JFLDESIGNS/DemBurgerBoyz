@@ -45,19 +45,18 @@ func leave_before_truck() -> void:
 	if leaving:return
 	leaving = true
 	var game := get_tree().current_scene
-	if game != null and is_instance_valid(game.get("game_audio")): game.game_audio.play_cat_chirp()
+	if game != null and is_instance_valid(game.get("game_audio")):
+		game.game_audio.play_cat_chirp()
+		game.game_audio.play_spatula_whoosh()
 	var start := position
-	var landing := Vector3(-4.8, 0, 3.2)
+	var exit := Vector3(10.5, 3.7, -4.0)
 	var tween := create_tween()
 	tween.tween_method(func(t: float):
-		position = start.lerp(landing, t) + Vector3(0, sin(t * PI) * 1.4, 0)
-		cat.rotation.z = sin(t * PI) * -.12
-	, 0.0, 1.0, .7)
-	tween.tween_callback(func():
-		var animation := cat.find_child("AnimationPlayer", true, false) as AnimationPlayer
-		if animation != null and animation.has_animation("02_Mail_Walk"): animation.play("02_Mail_Walk");animation.speed_scale = 2.3
-		cat.rotation.y = -PI * .5)
-	tween.tween_property(self, "position", Vector3(-12, 0, 3.2), .4).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		var travel := t * t
+		position = start.lerp(exit, travel) + Vector3(0, sin(t * PI) * 1.5, 0)
+		cat.rotation.z = -sin(t * PI) * .35
+		cat.rotation.y = lerp_angle(.65, PI * .5, t)
+	, 0.0, 1.0, .85)
 	await tween.finished
 	hide()
 

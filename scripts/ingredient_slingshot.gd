@@ -126,6 +126,7 @@ func catch_target(target: Vector2) -> Node3D:
 	var screen: Vector2 = game._gui_to_camera_screen(target)
 	var height: float = game.camera.get_viewport().get_visible_rect().size.y
 	var targets: Array = game.customers.duplicate()
+	targets.append_array(game._ingredient_extra_targets())
 	var mail_cat: Node3D = game._mail_cat_fling_target()
 	if is_instance_valid(mail_cat): targets.append(mail_cat)
 	if is_instance_valid(game.window_cat): targets.append(game.window_cat)
@@ -148,6 +149,7 @@ func launch(id: String, source: Vector2, target: Vector2) -> void:
 	var aim_screen: Vector2 = game._gui_to_camera_screen(target)
 	var best_distance := INF
 	var targets: Array = game.customers.duplicate()
+	targets.append_array(game._ingredient_extra_targets())
 	var mail_cat: Node3D = game._mail_cat_fling_target()
 	if is_instance_valid(mail_cat): targets.append(mail_cat)
 	if is_instance_valid(game.window_cat) and game.window_cat.is_visible_in_tree(): targets.append(game.window_cat)
@@ -200,6 +202,12 @@ func launch(id: String, source: Vector2, target: Vector2) -> void:
 				tween.kill()
 				flyer.queue_free()
 				return
+		if not game.mp_enabled or NetManager.is_host():
+			for extra in game._ingredient_extra_targets():
+				var spot: Vector3 = game._ingredient_target_head(extra)
+				var nearest := Geometry3D.get_closest_point_to_segment(spot,state.previous,pos)
+				if nearest.distance_to(spot)<.3:
+					state.hit=true;game._hit_ingredient_extra(extra);tween.kill();flyer.queue_free();return
 		for customer in game.customers:
 			if game.mp_enabled and not NetManager.is_host(): break
 			if not is_instance_valid(customer) or not customer is Node3D or not customer.is_visible_in_tree(): continue

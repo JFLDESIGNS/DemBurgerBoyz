@@ -31293,6 +31293,9 @@ func _start_background_person(idx: int, as_partner: bool = false) -> void:
 	if walker == null or not is_instance_valid(walker):
 		return
 	var preset: Dictionary = CustomerScript.take_next_saved_character_preset()
+	if not preset.is_empty() and int(get_meta("grisaldi_day", -1)) != day:
+		preset["grisaldi"] = true; preset["top_color"] = "ffffffff"; preset["shoe_color"] = "e52d35ff"; preset["top_style"] = 1
+		set_meta("grisaldi_day", day)
 	if preset.is_empty():
 		bg_people_wait[idx] = 4.0
 		return
@@ -31339,6 +31342,7 @@ func _start_background_person(idx: int, as_partner: bool = false) -> void:
 	walker.set_meta("street_hail_time", 0.0)
 	walker._wawa_click_area.collision_layer = CUSTOMER_WAWA_COLLISION_LAYER
 	bg_people_active[idx] = true
+	_style_grisaldi(walker, bool(preset.get("grisaldi",false)))
 	if is_run and walker.has_method("play_street_run"):
 		walker.call("play_street_run", 1.04 + randf() * 0.22)
 	elif walker.has_method("play_street_walk"):
@@ -31387,6 +31391,7 @@ func mp_background_person_start(idx: int, preset: Dictionary, dir: float, is_run
 	walker.set_meta("street_hail_time", 0.0)
 	walker._wawa_click_area.collision_layer = CUSTOMER_WAWA_COLLISION_LAYER
 	bg_people_active[idx] = true
+	_style_grisaldi(walker, bool(preset.get("grisaldi",false)))
 	var walk_mid: float = (BG_PEOPLE_SPEED_MIN + BG_PEOPLE_SPEED_MAX) * 0.5
 	if is_run and walker.has_method("play_street_run"):
 		walker.call("play_street_run", clampf(speed / maxf(walk_mid, 0.01), 1.04, 1.26))
@@ -31477,6 +31482,10 @@ func _update_background_people(delta: float) -> void:
 				continue
 			_start_background_person(i)
 			continue
+		if int(walker.get_meta("food_stop_until",0)) > Time.get_ticks_msec(): continue
+		if int(walker.get_meta("food_stop_until",0)) > 0:
+			walker.set_meta("food_stop_until",0);walker.play_street_walk()
+		if bool(walker.get_meta("grisaldi_claimed",false)): continue
 		if _update_background_hail(i, delta): continue
 		var dir: float = float(bg_people_dir[i])
 		var crowd_before: Vector3=walker.global_position
@@ -31526,7 +31535,7 @@ func _hail_background_person(idx: int) -> void:
 	var walker = bg_people[idx]
 	if not is_instance_valid(walker) or not walker.visible: return
 	var result = str(walker.get_meta("street_hail", ""))
-	if result.is_empty(): result = _street_hail_outcome(randi_range(0,99))
+	if result.is_empty(): result = "grisaldi" if bool(walker.get_meta("grisaldi",false)) else _street_hail_outcome(randi_range(0,99))
 	if mp_enabled and NetManager.is_online(): mp_background_person_hail.rpc(idx,result)
 	else: mp_background_person_hail(idx,result)
 
@@ -31540,6 +31549,9 @@ func mp_hail_background_person(idx: int) -> void:
 func mp_background_person_hail(idx: int, result: String) -> void:
 	if idx < 0 or idx >= bg_people.size() or idx >= bg_people_active.size() or not bool(bg_people_active[idx]) or not is_instance_valid(bg_people[idx]): return
 	var walker = bg_people[idx]
+	if result == "grisaldi":
+		_reveal_grisaldi(walker)
+		return
 	_setup_burgerpals_startup_sound(); _play_burgerpals_voice()
 	if not str(walker.get_meta("street_hail", "")).is_empty(): return
 	walker.set_meta("street_hail", result)
@@ -65214,6 +65226,18 @@ func _set_ingredient_bin_hover(btn: Control, hovered: bool) -> void:
 			break
 	if id == "":
 		return
+	var icon := btn.get_node_or_null("Stack/IconMargin/StripIcon") as Control
+	if icon != null:
+		var previous = icon.get_meta("hover_bob", null)
+		if previous is Tween and previous.is_valid(): previous.kill()
+		if not icon.has_meta("hover_rest"): icon.set_meta("hover_rest", icon.position.y)
+		var rest: float = icon.get_meta("hover_rest")
+		icon.position.y = rest
+		if hovered:
+			var bob := icon.create_tween().set_loops()
+			bob.tween_property(icon,"position:y",rest-3.0,.8).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+			bob.tween_property(icon,"position:y",rest+1.0,.8).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+			icon.set_meta("hover_bob",bob)
 	ingredient_bin_hover[id] = hovered
 	var tub: Node3D = ingredient_bin_nodes.get(id, null)
 	if tub == null or not is_instance_valid(tub):
@@ -81264,6 +81288,7 @@ func _mail_cat_fling_target() -> Node3D:
 	return mail_delivery_truck.courier if mail_delivery_truck.courier.is_visible_in_tree() else null
 
 func _ingredient_target_head(subject: Node3D) -> Vector3:
+	if is_instance_valid(park_bird_house) and subject == park_bird_house.bird: return subject.global_position + Vector3.UP * .08
 	if subject == window_cat: return window_cat.head_global()
 	if is_instance_valid(mail_delivery_truck) and subject == mail_delivery_truck.courier:
 		return mail_delivery_truck.head_global()
@@ -81348,3 +81373,60 @@ func mp_pal_ball_end(serial: int) -> void:
 func mp_request_pal_ball() -> void:
 	if NetManager.is_host() and NetManager.connected_peer_ids().has(multiplayer.get_remote_sender_id()):
 		_maybe_start_pal_ball_break(true)
+
+
+func _ingredient_extra_targets() -> Array:
+	var targets: Array = []
+	for walker in bg_people:
+		if is_instance_valid(walker) and walker.is_visible_in_tree(): targets.append(walker)
+	if is_instance_valid(park_bird_house) and is_instance_valid(park_bird_house.bird) and park_bird_house.bird.is_visible_in_tree(): targets.append(park_bird_house.bird)
+	return targets
+
+func _hit_ingredient_extra(subject: Node3D) -> void:
+	var idx := bg_people.find(subject)
+	if mp_enabled and NetManager.is_online(): mp_ingredient_extra_hit.rpc(idx)
+	else: mp_ingredient_extra_hit(idx)
+
+@rpc("authority", "call_local", "reliable")
+func mp_ingredient_extra_hit(idx: int) -> void:
+	if idx < 0:
+		if is_instance_valid(park_bird_house): park_bird_house._enter(&"Takeoff")
+		return
+	if idx >= bg_people.size():return
+	var walker = bg_people[idx]
+	walker.set_meta("food_stop_until",Time.get_ticks_msec()+1800)
+	walker.food_hit_reaction()
+	if game_audio: game_audio.play_customer_wawa_click(.8,walker.get_customer_voice())
+	walker.animate_wawa(1.5)
+
+func _style_grisaldi(walker: Node3D, special: bool) -> void:
+	walker.set_meta("grisaldi",special)
+	walker.set_meta("grisaldi_claimed",false)
+	if not special:return
+	var checker := ShaderMaterial.new();checker.shader=preload("res://shaders/grisaldi_checker.gdshader")
+	var shoes := StandardMaterial3D.new();shoes.albedo_color=Color("E52D35")
+	for mesh in walker.find_children("*","MeshInstance3D",true,false):
+		var label := str(mesh.name).to_lower()
+		if "top" in label or "shirt" in label: mesh.material_override=checker
+		if "shoe" in label: mesh.material_override=shoes
+
+func _reveal_grisaldi(walker: Node3D) -> void:
+	if bool(walker.get_meta("grisaldi_claimed",false)):return
+	walker.set_meta("grisaldi_claimed",true)
+	walker.play_street_run(1.4)
+	var tween := create_tween()
+	tween.tween_property(walker,"position",Vector3(0,_bg_people_y(),2.8),1.0)
+	await tween.finished
+	if not is_instance_valid(walker):return
+	walker._play_anim("idle");walker.rotation_degrees.y=CustomerScript.FACE_TRUCK_YAW
+	var speech := Label3D.new();speech.text="You have found Grisaldi!";speech.font_size=42;speech.pixel_size=.006;speech.billboard=BaseMaterial3D.BILLBOARD_ENABLED;speech.position.y=2.3;walker.add_child(speech)
+	var voice := AudioStreamPlayer.new();voice.stream=load("res://sounds/grisaldi_found.wav");voice.bus="SFX";voice.volume_db=-8;add_child(voice);voice.finished.connect(voice.queue_free);voice.play()
+	for burst in 4:
+		if not mp_enabled or NetManager.is_host(): _earn_money(50)
+		_fly_sale_bills_to_hud(walker,8)
+		if game_audio:game_audio.play_chaching()
+		await get_tree().create_timer(.35).timeout
+	await get_tree().create_timer(1.5).timeout
+	if is_instance_valid(speech):speech.queue_free()
+	if is_instance_valid(walker):
+		walker.set_meta("grisaldi_claimed",false);walker.set_meta("grisaldi",false);walker.set_meta("street_hail","ignore");walker.play_street_walk()
