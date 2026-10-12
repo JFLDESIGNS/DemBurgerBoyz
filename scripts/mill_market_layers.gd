@@ -8,6 +8,7 @@ var _axes: Dictionary = {}
 var _game: Node = null
 var _walker_reflections: ShaderMaterial
 var _canopy_shades: Dictionary = {}
+var _indoor_life: Node3D
 
 func _ready() -> void:
  _layer("CanopyBacking", "canopy_backing.png", -0.01)
@@ -34,6 +35,9 @@ func _ready() -> void:
  add_child(doors)
  _painted_materials(doors)
  var data: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(ASSETS + "layers.json"))
+ _indoor_life = preload("res://scripts/indoor_window_life.gd").new()
+ add_child(_indoor_life)
+ _indoor_life.setup(data)
  for spec: Dictionary in data["doors"]:
   var key := "old_poodle" if spec["name"] == "Old_Poodle_Door" else "motel"
   var hinge := doors.find_child(spec["hinge"], true, false) as Node3D
@@ -122,6 +126,7 @@ func configure_for_game(game: Node) -> void:
 
 func _process(_delta: float) -> void:
  if is_instance_valid(_game):
+  _indoor_life.tick(_delta,not _game.mp_enabled or NetManager.is_host(),_game.playing and not _game.shift_paused)
   _update_canopy_depth()
   _update_walker_reflections()
   _update_canopy_walker_shade()
@@ -170,11 +175,19 @@ func _begin_trip(idx: int, door: String, departing: bool, from: Vector3, to: Vec
  walker._wawa_click_area.collision_layer = 0
  walker.global_position = from
  walker.rotation.y = atan2(to.x - from.x, to.z - from.z)
- _trip = {"index": idx, "door": door, "departing": departing, "time": 0.0, "from": from, "to": to, "closed": false, "base_scale": walker.scale}
- if departing: walker.scale *= 0.84
- open_door(door)
+ _trip = {"index": idx, "door": door, "departing": departing, "time": 0.0, "from": from, "to": to, "closed": false, "base_scale": walker.scale, "lead": 0.9 if departing and door != "market" else 0.0, "opened": false}
+ if departing: walker.scale *= 0.96
+ if float(_trip.lead) <= 0.0: _open_trip_door()
+ else: walker.visible=false
+ _set_door_appearance(walker,0.0 if departing else 1.0,0.65 if departing else 0.0)
  walker.set_meta("market_shopping_bag",departing and door == "market")
- if walker.has_method("play_street_walk"): walker.play_street_walk(1.6)
+ if walker.has_method("play_street_walk"): walker.play_street_walk(1.15)
+
+func _open_trip_door() -> void:
+ _trip.opened=true
+ var door: String=_trip.door
+ _game.bg_people[int(_trip.index)].visible=true
+ open_door(door)
  _shop_sound_serial += 1
  _shop_sound_door = door
  _play_shop_sounds(door)
@@ -184,9 +197,11 @@ func cancel_building_traffic() -> void:
   for walker in _game.bg_people:
    if is_instance_valid(walker):
     if walker.has_meta("building_base_scale"): walker.scale = walker.get_meta("building_base_scale")
+    _set_door_appearance(walker,1.0,0.0)
     walker.set_meta("building_trip", false)
     walker.set_meta("market_shopping_bag",false)
  _trip.clear()
+ _indoor_life.reset()
  _traffic_wait = 10.0
  door_animations.stop()
  for hinge in _hinges.values(): hinge.quaternion = Quaternion.IDENTITY
@@ -201,10 +216,19 @@ func tick_building_traffic(delta: float) -> void:
    return
   var walker: Node3D = _game.bg_people[idx]
   _trip["time"] = float(_trip["time"]) + delta
-  var elapsed := float(_trip["time"])
+  var total := float(_trip["time"])
+  var lead := float(_trip.lead)
+  if lead > 0.0:
+   _indoor_life.cue_door(str(_trip.door),smoothstep(0.0,0.35,total)*(1.0-smoothstep(lead-.3,lead,total)))
+  if total < lead: return
+  if not bool(_trip.opened): _open_trip_door()
+  var elapsed := total-lead
   var u := clampf((elapsed - 0.5) / 1.15, 0.0, 1.0)
-  walker.global_position = (_trip["from"] as Vector3).lerp(_trip["to"], u)
-  walker.scale = (_trip["base_scale"] as Vector3) * lerpf(0.84,1.0,u) if bool(_trip["departing"]) else (_trip["base_scale"] as Vector3) * lerpf(1.0,0.84,u)
+  var travel := lerpf(u,smoothstep(0.0,1.0,u),0.45)
+  walker.global_position = (_trip["from"] as Vector3).lerp(_trip["to"], travel)
+  walker.scale = (_trip["base_scale"] as Vector3) * lerpf(0.96,1.0,u) if bool(_trip["departing"]) else (_trip["base_scale"] as Vector3) * lerpf(1.0,0.96,u)
+  var doorway := 1.0-smoothstep(0.0,.42,u) if bool(_trip.departing) else smoothstep(.58,1.0,u)
+  _set_door_appearance(walker,1.0-doorway,doorway*.65)
   if u >= 1.0 and not bool(_trip["closed"]):
    _trip["closed"] = true
    close_door(str(_trip["door"]))
@@ -213,6 +237,7 @@ func tick_building_traffic(delta: float) -> void:
     walker._wawa_click_area.collision_layer = 0
   if elapsed >= 2.2:
    walker.scale = _trip["base_scale"]
+   _set_door_appearance(walker,1.0,0.0)
    walker.set_meta("building_trip", false)
    if bool(_trip["departing"]):
     walker._wawa_click_area.collision_layer = _game.CUSTOMER_WAWA_COLLISION_LAYER
@@ -240,9 +265,12 @@ func tick_building_traffic(delta: float) -> void:
 func traffic_snapshot() -> Dictionary:
  var angles := {}
  for door in _hinges: angles[door] = _hinges[door].quaternion
- return {"angles": angles, "sound_serial": _shop_sound_serial, "sound_door": _shop_sound_door, "sound_fresh": not _trip.is_empty() and float(_trip.get("time",99.0)) < 1.0}
+ return {"indoor": _indoor_life.events.duplicate(true), "cue_door": str(_trip.get("door","")), "cue": smoothstep(0.0,.35,float(_trip.get("time",0.0)))*(1.0-smoothstep(.6,.9,float(_trip.get("time",0.0)))) if float(_trip.get("lead",0.0))>0.0 else 0.0, "angles": angles, "sound_serial": _shop_sound_serial, "sound_door": _shop_sound_door, "sound_fresh": not _trip.is_empty() and float(_trip.get("time",99.0))-float(_trip.get("lead",0.0)) < 1.0 and bool(_trip.get("opened",false))}
 
 func apply_traffic_snapshot(data: Dictionary) -> void:
+ _indoor_life.events = data.get("indoor",[]).duplicate(true)
+ _indoor_life.render_events()
+ for door in ["motel","old_poodle"]: _indoor_life.cue_door(door,float(data.get("cue",0.0)) if door==str(data.get("cue_door","")) else 0.0)
  var serial := int(data.get("sound_serial",0))
  if serial > _shop_sound_serial:
   _shop_sound_serial = serial
@@ -287,8 +315,8 @@ func _update_walker_reflections() -> void:
   if size.x > 0.0 and size.y > 0.0:
    var origin := cat.global_position - camera.global_basis.x * size.y * 0.50
    var feet := _reflection_uv(origin,camera)
-   var head := _reflection_uv(origin + Vector3.UP * size.y * 1.3,camera)
-   var side := _reflection_uv(origin + camera.global_basis.x * size.x * 0.7,camera)
+   var head := _reflection_uv(origin + Vector3.UP * size.y * 0.65,camera)
+   var side := _reflection_uv(origin + camera.global_basis.x * size.x * 0.56,camera)
    cat_rect = Vector4(feet.x,feet.y,maxf(absf(side.x-feet.x)*1.26,.001),maxf(feet.y-head.y,.001))
  _walker_reflections.set_shader_parameter("cat_blob",cat_rect)
 
@@ -325,6 +353,8 @@ func _update_canopy_walker_shade() -> void:
   material.set_shader_parameter("upper_body_start",walker.global_position.y+height*.38)
   material.set_shader_parameter("upper_body_end",walker.global_position.y+height*.53)
   material.set_shader_parameter("shade_amount",amount)
+  material.set_shader_parameter("door_dark",float(walker.get_meta("door_dark",0.0)))
+  material.set_shader_parameter("door_alpha",float(walker.get_meta("door_alpha",1.0)))
 
 func _exit_tree() -> void:
  if is_instance_valid(_game):
@@ -371,6 +401,7 @@ func _update_market_bags() -> void:
    bag = factory.fitted("SM_FastFoodBagOpen",0.72)
    factory.free()
    bag.name = "MarketShoppingBag"
+   bag.scale.y *= 0.85
    walker.add_child(bag)
    var logo := Sprite3D.new()
    logo.texture = preload("res://assets/ui/burger_pals_letter_mask.png")
@@ -383,10 +414,16 @@ func _update_market_bags() -> void:
    logo.rotation.y = PI
    bag.add_child(logo)
   bag.show()
+  for mesh in bag.find_children("*","GeometryInstance3D",true,false): mesh.transparency=1.0-float(walker.get_meta("door_alpha",1.0))
   var skeleton := walker.find_child("Skeleton3D",true,false) as Skeleton3D
   var hand := skeleton.find_bone("RightHand") if skeleton != null else -1
   if hand >= 0:
-   bag.position = walker.to_local(skeleton.to_global(skeleton.get_bone_global_pose(hand).origin)) - Vector3(0,0.64,0)
+   bag.position = walker.to_local(skeleton.to_global(skeleton.get_bone_global_pose(hand).origin)) - Vector3(0,0.544,0)
   else:
    bag.position = Vector3(0.32,0.42,0.04)
   bag.rotation.z = sin(Time.get_ticks_msec()*0.004+walker.position.x)*0.035
+
+func _set_door_appearance(walker: Node3D,alpha: float,dark: float) -> void:
+ walker.set_meta("door_alpha",alpha)
+ walker.set_meta("door_dark",dark)
+ if walker.has_method("_apply_leave_fade_alpha"): walker._apply_leave_fade_alpha(alpha)

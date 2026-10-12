@@ -76,7 +76,7 @@ func encounter_outcome(a: Node, b: Node, roll: float) -> String:
 
 func eligible(c) -> bool:
 	if not is_instance_valid(c) or bool(c.get_meta("mobile_order", false)) or bool(c.get_meta("delivery_driver", false)): return false
-	return is_instance_valid(c) and c.has_method("get_customer_voice") and c.is_waiting and not c.is_leaving and not c.is_ragdoll and not c._eating and not c.dialogue_open and not c.is_cut_collector and not c.is_challenge_guest and not c.is_disguise_cat and not c.is_terrorist and not bool(c.get_meta("serve_in_progress", false)) and not c.has_meta("couple_partner")
+	return is_instance_valid(c) and c.has_method("get_customer_voice") and c.is_waiting and not c.is_leaving and not c.is_ragdoll and not c._eating and not c.dialogue_open and not c.is_cut_collector and not c.is_challenge_guest and not c.is_disguise_cat and not c.is_terrorist and not bool(c.get_meta("truck_smack_busy",false)) and not bool(c.get_meta("serve_in_progress", false)) and not c.has_meta("couple_partner")
 
 func _process(delta: float) -> void:
 	if not is_instance_valid(game) or not game.playing or game.shift_paused or game.options_menu_open or game.tutorial_mode: return
@@ -113,12 +113,20 @@ func _process(delta: float) -> void:
 		cat_left = randf_range(7.0, 12.0)
 		var cat = game.window_cat
 		if is_instance_valid(cat) and cat.visible and cat._state == "peek" and not cat._delivery_peek_active and not waiting.is_empty():
-			var favorites = waiting.filter(func(person): return str(person.get_custom_character_preset().get("name", "")).to_lower() == "char33" and cat.position.distance_to(person.position) < 4.0)
-			var c = favorites.pick_random() if not favorites.is_empty() else waiting.pick_random()
-			if cat.position.distance_to(c.position) < 4.0:
-				var kind = "cat_love" if not favorites.is_empty() or randf() < .5 else "cat_swat"
+			for person in waiting:
+				if not bool(person.get_meta("cat_greeted",false)):
+					person.set_meta("cat_greeted",true)
+					if randf()<.95:
+						encounter(person,null,"cat_notice")
+						if game.mp_enabled and NetManager.is_online():social_event.rpc(game._customer_net_id(person),-1,"cat_notice")
+			var first=first_ordering_customer()
+			var c=first if eligible(first) else waiting.pick_random()
+			if cat.position.distance_to(c.position)<4.0 and randf()<.95:
+				var kind="cat_love"
+				if c==first: kind="cat_swat" if randf()<.25 else ("cat_rub" if randf()<.4 else "cat_love")
 				encounter(c,null,kind)
 				if game.mp_enabled and NetManager.is_online(): social_event.rpc(game._customer_net_id(c),-1,kind)
+
 	if walker_left <= 0.0:
 		walker_left = randf_range(40.0,75.0)
 		if not couples.is_empty() and walkers.is_empty():
@@ -166,7 +174,12 @@ func heart(c) -> void:
 func encounter(a,b,kind: String, chat: int = -1) -> void:
 	if kind.begins_with("cat_"):
 		var cat = game.window_cat
-		if not is_instance_valid(cat): return
+		if not is_instance_valid(cat) or not eligible(a): return
+		if kind=="cat_notice":
+			a.set_meta("likes_cat",true);heart(a);glance(a,cat.head_global());return
+		a.set_meta("likes_cat",true)
+		heart(a)
+		if a==first_ordering_customer(): a.pet_cat()
 		glance(a,cat.global_position + Vector3(0,.45,0))
 		wawa(a,1.65)
 		cat.set_meta("social_look",a.global_position)
@@ -176,8 +189,10 @@ func encounter(a,b,kind: String, chat: int = -1) -> void:
 		create_tween().tween_interval(.75).finished.connect(func():
 			var animal = cat_ref.get_ref()
 			var person = person_ref.get_ref()
-			if is_instance_valid(animal) and is_instance_valid(person) and animal._state == "peek":
-				animal.react_to_customer(person,kind == "cat_love")
+			if is_instance_valid(animal) and eligible(person) and animal._state == "peek":
+				if not animal.mp_puppet:
+					if kind=="cat_rub": animal.rub_customer(person)
+					else: animal.react_to_customer(person,kind != "cat_swat")
 				if kind == "cat_love":
 					animal.wants_meow.emit(1.2)
 					heart(person)
@@ -293,6 +308,8 @@ func pair_event(first_id: int, second_id: int) -> void:
 
 @rpc("authority", "call_remote", "reliable")
 func cat_smack(customer_id: int) -> void:
+	var target=game._customer_by_net_id(customer_id)
+	if target!=first_ordering_customer() or not eligible(target):return
 	var audio = get_tree().get_first_node_in_group("game_audio")
 	if is_instance_valid(audio):
 		audio.play_cat_cartoon_smack()
@@ -311,3 +328,9 @@ func play_love_song(person: Node3D) -> void:
 	person.add_child(audio)
 	audio.finished.connect(audio.queue_free)
 	audio.play()
+
+func first_ordering_customer() -> Node3D:
+	for c in game.customers:
+		if is_instance_valid(c) and not c.is_leaving and not bool(c.get_meta("meal_aside",false)) and not c.is_cut_collector and not c.is_terrorist and not bool(c.get_meta("delivery_errand",false)):
+			return c
+	return null

@@ -23,10 +23,12 @@ void fragment() {
  }
  if(cat_blob.z > 0.0 && cat_blob.w > 0.0) {
   vec2 p=vec2((UV.x-cat_blob.x)/cat_blob.z,(cat_blob.y-UV.y)/cat_blob.w);
-  float cat=ellipse(p,vec2(0.0,0.40),vec2(0.48,0.34));
-  cat=max(cat,ellipse(p,vec2(0.0,0.73),vec2(0.29,0.23)));
-  cat=max(cat,ellipse(p,vec2(-0.20,0.93),vec2(0.09,0.14)));
-  cat=max(cat,ellipse(p,vec2(0.20,0.93),vec2(0.09,0.14)));
+  // Four soft blobs; mirrored ears share one evaluation, no square roots.
+  float cat=ellipse(p,vec2(-0.07,0.35),vec2(0.39,0.30));
+  cat=max(cat,ellipse(p,vec2(0.06,0.69),vec2(0.23,0.23)));
+  cat=max(cat,ellipse(vec2(abs(p.x-0.06),p.y),vec2(0.16,0.91),vec2(0.075,0.16)));
+  cat=max(cat,ellipse(p,vec2(0.34,0.30),vec2(0.12,0.22)));
+  cat *= 0.85;
   silhouette=max(silhouette,cat);
  }
  vec3 reflected_blue = min(glass.rgb * vec3(0.22,0.38,0.52),vec3(0.012,0.06,0.11));

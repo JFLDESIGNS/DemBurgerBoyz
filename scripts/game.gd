@@ -31442,7 +31442,7 @@ func _mp_send_background_people_snapshot(peer_id: int = 0) -> void:
 		active.append(on)
 		xs.append(float(walker.position.x) if on else 0.0)
 		zs.append(float(walker.position.z) if on else 0.0)
-		poses.append({"y": walker.position.y, "scale": walker.scale, "yaw": walker.rotation.y, "trip": bool(walker.get_meta("building_trip", false)), "bag": bool(walker.get_meta("market_shopping_bag",false)), "visible": walker.visible} if on else {})
+		poses.append({"y": walker.position.y, "scale": walker.scale, "door_alpha": float(walker.get_meta("door_alpha",1.0)), "door_dark": float(walker.get_meta("door_dark",0.0)), "yaw": walker.rotation.y, "trip": bool(walker.get_meta("building_trip", false)), "bag": bool(walker.get_meta("market_shopping_bag",false)), "visible": walker.visible} if on else {})
 	var detail := {"poses": poses, "doors": building.traffic_snapshot() if building != null else {}}
 	if peer_id > 0:
 		mp_background_people_snapshot.rpc_id(peer_id, active, xs, zs, detail)
@@ -31469,8 +31469,10 @@ func mp_background_people_snapshot(active: Array, xs: Array, zs: Array, detail: 
 			continue
 		if not bool(bg_people_active[i]):
 			continue ## Reliable start carries the matching character before poses apply.
+		if bool(walker.get_meta("truck_smack_busy",false)): continue
 		var pose: Dictionary = poses[i] if i < poses.size() else {}
 		walker.scale = pose.get("scale", Vector3.ONE * _bg_people_scale())
+		if building != null: building._set_door_appearance(walker,float(pose.get("door_alpha",1.0)),float(pose.get("door_dark",0.0)))
 		walker.set_meta("building_trip", bool(pose.get("trip", false)))
 		walker.set_meta("market_shopping_bag",bool(pose.get("bag",false)))
 		walker.visible = bool(pose.get("visible", true))
@@ -31522,6 +31524,7 @@ func _update_background_people(delta: float) -> void:
 			_start_background_person(i)
 			continue
 		if building != null and building.is_building_walker(walker): continue
+		if bool(walker.get_meta("truck_smack_busy",false)): continue
 		if int(walker.get_meta("food_stop_until",0)) > Time.get_ticks_msec(): continue
 		if int(walker.get_meta("food_stop_until",0)) > 0:
 			walker.set_meta("food_stop_until",0);walker.play_street_walk()
@@ -31773,7 +31776,7 @@ func _build_park_bird_house(tree: Node3D) -> void:
 	tree.add_child(park_bird_house)
 	# Preserve meter-sized assets beneath the imported tree's 0.26 scale.
 	# Hang from the outer branch, 1.33 m farther from the original placement; follows tree shake.
-	park_bird_house.global_transform = Transform3D(Basis(Vector3.UP, PI).scaled(Vector3.ONE * 0.8), tree.global_position + Vector3(2.4952, 1.7286, -0.17))
+	park_bird_house.global_transform = Transform3D(Basis(Vector3.UP, PI).scaled(Vector3.ONE * 0.8), tree.global_position + Vector3(2.3428, 1.7286, -0.17))
 	park_bird_house.set_enabled(current_location_id == TruckLocationsScript.DEFAULT_ID)
 
 
@@ -48400,6 +48403,12 @@ func _splat_condiment_on_customer(cust: Node3D, flavor: String, zone: String) ->
 	)
 	if randf() > 0.28:
 		return
+	if not mp_enabled or NetManager.is_host():
+		var hits:=int(cust.get_meta("flung_hit_count",0))+1
+		cust.set_meta("flung_hit_count",hits)
+		if hits>=4:
+			cust.set_meta("flung_hit_count",0)
+			_request_truck_smack(cust)
 	var impatience := 0.45
 	if cust.has_method("patience_ratio"):
 		impatience = clampf(1.0 - float(cust.call("patience_ratio")), 0.0, 1.0)
@@ -68211,9 +68220,9 @@ func _build_open_closed_sign() -> void:
 
 	var root := Node3D.new()
 	root.name = "OpenClosedSign"
-	root.scale = Vector3.ONE * 0.84
+	root.scale = Vector3.ONE * 0.672
 	## Raised another ~50 screen px at this depth.
-	root.position = Vector3(-1.155, 2.20, 1.14) + _prop_offset("open_sign")
+	root.position = Vector3(-1.235, 2.20, 1.14) + _prop_offset("open_sign")
 	root.rotation_degrees = Vector3(0.0, OPEN_CLOSED_SIGN_YAW_OPEN, 0.0)
 	world.add_child(root)
 	open_closed_sign = root
@@ -71704,6 +71713,8 @@ func _play_serve_fly_to_mouth(
 				(row as Control).scale = Vector2.ONE
 
 	var finish_serve := func() -> void:
+		while is_instance_valid(customer) and bool(customer.get_meta("truck_smack_busy",false)):
+			await get_tree().process_frame
 		if customer != null and is_instance_valid(customer) and customer.has_method("finish_catch_burger"):
 			customer.finish_catch_burger()
 		_customer_burger_arrived(customer)
@@ -71848,6 +71859,10 @@ func _play_serve_fly_to_mouth(
 			stack.hide()
 			if not mp_enabled or NetManager.is_host():
 				_physical_garbage_react()
+				if is_instance_valid(customer) and randf()<.5:
+					customer._eating=false
+					customer._burger_eat_phase=""
+					_request_truck_smack(customer)
 		)
 		tw.tween_interval(1.15)
 		tw.tween_callback(finish_serve)
@@ -81431,7 +81446,9 @@ func _ingredient_extra_targets() -> Array:
 
 func _hit_ingredient_extra(subject: Node3D) -> void:
 	var idx := bg_people.find(subject)
-	if mp_enabled and NetManager.is_online(): mp_ingredient_extra_hit.rpc(idx)
+	if mp_enabled and NetManager.is_online():
+		if NetManager.is_host():mp_ingredient_extra_hit.rpc(idx)
+		else:mp_request_ingredient_extra_hit.rpc_id(1,idx)
 	else: mp_ingredient_extra_hit(idx)
 
 @rpc("authority", "call_local", "reliable")
@@ -81443,8 +81460,12 @@ func mp_ingredient_extra_hit(idx: int) -> void:
 	var walker = bg_people[idx]
 	walker.set_meta("food_stop_until",Time.get_ticks_msec()+1800)
 	walker.food_hit_reaction()
-	if game_audio: game_audio.play_customer_wawa_click(.8,walker.get_customer_voice())
+	walker.play_street_rejection(true)
+	if game_audio:
+		game_audio.play_ingredient_plap()
+		game_audio.play_customer_wawa_click(.8,walker.get_customer_voice())
 	walker.animate_wawa(1.5)
+	if (not mp_enabled or NetManager.is_host()) and randf()<.5: _request_truck_smack(walker)
 
 func _style_grisaldi(walker: Node3D, special: bool) -> void:
 	walker.set_meta("grisaldi",special)
@@ -81536,3 +81557,31 @@ func play_street_door_animation(animation_name: String) -> void:
 
 func _mill_market_layer() -> Node3D:
 	return street_matte.get_node_or_null("MillMarketLayers") as Node3D if is_instance_valid(street_matte) else null
+
+func _request_truck_smack(person: Node3D) -> void:
+	if mp_enabled and not NetManager.is_host():return
+	if not is_instance_valid(person) or person.is_leaving or person.is_ragdoll or bool(person.get_meta("truck_smack_busy",false)) or bool(person.get_meta("building_trip",false)):return
+	if person.is_cut_collector or person.is_disguise_cat or person.is_terrorist or bool(person.get_meta("hotdog_boss",false)):return
+	if Time.get_ticks_msec()<int(person.get_meta("truck_smack_cooldown",0)):return
+	person.set_meta("truck_smack_cooldown",Time.get_ticks_msec()+18000)
+	var walker_index:=bg_people.find(person)
+	var customer_id: int=_customer_net_id(person) if walker_index<0 else -1
+	if mp_enabled and NetManager.is_online():mp_customer_truck_smack.rpc(walker_index,customer_id,person.global_position)
+	else:_start_customer_truck_smack(person,person.global_position)
+
+@rpc("authority","call_local","reliable")
+func mp_customer_truck_smack(walker_index: int,customer_id: int,origin: Vector3) -> void:
+	var person: Node3D=bg_people[walker_index] if walker_index>=0 and walker_index<bg_people.size() else _customer_by_net_id(customer_id)
+	if not is_instance_valid(person) or bool(person.get_meta("truck_smack_busy",false)):return
+	_start_customer_truck_smack(person,origin)
+
+func _start_customer_truck_smack(person: Node3D,origin: Vector3) -> void:
+	var reaction=preload("res://scripts/customer_truck_smack.gd").new()
+	add_child(reaction)
+	reaction.setup(self,person,origin)
+
+@rpc("any_peer","call_remote","reliable")
+func mp_request_ingredient_extra_hit(idx: int) -> void:
+	if not NetManager.is_host() or not NetManager.connected_peer_ids().has(multiplayer.get_remote_sender_id()):return
+	if idx< -1 or idx>=bg_people.size():return
+	mp_ingredient_extra_hit.rpc(idx)

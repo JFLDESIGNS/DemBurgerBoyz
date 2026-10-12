@@ -87,6 +87,7 @@ func _exit_tree() -> void:
 	if is_instance_valid(look): look.queue_free()
 
 func _process(delta: float) -> void:
+	if is_instance_valid(customer) and (bool(customer.get_meta("truck_smack_busy",false)) or float(customer.get("_cat_pet_left"))>0.0):return
 	if not is_instance_valid(customer): return
 	var player: AnimationPlayer = customer.get("_anim_player")
 	if not customer.get("is_ragdoll") and (not customer.get("is_leaving") or customer.get("_leave_phase") == "review"):

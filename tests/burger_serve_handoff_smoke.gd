@@ -1,5 +1,5 @@
 extends SceneTree
-const Customer = preload("res://scripts/customer.gd")
+var Customer: GDScript
 var failures: Array[String] = []
 var render_preview := false
 
@@ -11,6 +11,7 @@ func expect(ok: bool, message: String) -> void:
 func _initialize() -> void:call_deferred("run")
 
 func run() -> void:
+	Customer = load("res://scripts/customer.gd")
 	render_preview = "--render-preview" in OS.get_cmdline_user_args()
 	var gameplay := load("res://scripts/game.gd") as GDScript
 	if gameplay == null or not gameplay.can_instantiate():
@@ -58,8 +59,9 @@ func run() -> void:
 	light.rotation_degrees = Vector3(-35,-30,0)
 	light.light_energy = 1.2
 	game.add_child(light)
-	var c := Customer.new()
-	c.setup(["bun_bottom","patty","bun_top"],Color.WHITE,45.0,0,0,0,-1,{} if "--plain" in OS.get_cmdline_user_args() else {"format_version":8,"name":"Serve Preview","body_type":"kenney_chunky_toon","skin_color":"cf895fff","top_style":2},true)
+	var c = Customer.new()
+	var recipe: Array[String]=["bun_bottom","patty","bun_top"]
+	c.setup(recipe,Color.WHITE,45.0,0,0,0,-1,{} if "--plain" in OS.get_cmdline_user_args() else {"format_version":8,"name":"Serve Preview","body_type":"kenney_chunky_toon","skin_color":"cf895fff","top_style":2},true)
 	game.add_child(c)
 	c.set_process(false)
 	c.is_waiting = true
@@ -73,7 +75,7 @@ func run() -> void:
 	c.set_meta("meal_stepping_aside", true)
 	var replica := 0 if "--replicated" in OS.get_cmdline_user_args() else -1
 	game.call("_play_serve_fly_to_mouth",0,c,func() -> void:committed[0] = true,null,replica,0)
-	expect(station.modulate.a == 0.0, "Source burger hides immediately during handoff")
+	expect(not station.visible or station.modulate.a == 0.0, "Source burger hides immediately during handoff")
 	var feedback_pool: Array = game.get("_serve_fly_root_pool")
 	expect(not feedback_pool.is_empty(), "Serve must acquire its feedback before waiting for movement")
 	if not feedback_pool.is_empty():

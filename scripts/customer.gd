@@ -410,6 +410,7 @@ const STUCK_FOOD_FACE_SPOTS: Array[Vector2] = [
 ]
 ## Catching / eating a served burger in the window.
 var _eating: bool = false
+var _cat_pet_left := 0.0
 var _eat_lean_x: float = 0.0
 ## Glock hit — blood + limp skeleton flop (not a spinning tornado).
 var is_ragdoll: bool = false
@@ -1363,6 +1364,7 @@ func _play_anim(state: String) -> void:
 
 
 func _select_character_animation(state: String) -> void:
+	if _eating and state in ["walk","run"]: return
 	if _powdering:
 		return
 	if _anim_player == null:
@@ -2433,10 +2435,18 @@ func _process(delta: float) -> void:
 	_advance_customer(delta)
 
 func _advance_customer(delta: float) -> void:
+	if _cat_pet_left > 0.0:
+		if _eating or is_leaving or is_ragdoll or not is_waiting:
+			_cat_pet_left=0.0;_reset_skeleton_pose()
+		else:
+			_cat_pet_left=maxf(0.0,_cat_pet_left-delta)
+			_apply_cat_pet_pose()
+			if _cat_pet_left<=0.0: _reset_skeleton_pose();_anim_state="";_play_anim("idle")
+			return
 	if bool(get_meta("delivery_errand", false)):
 		if mp_host_driven: _update_host_driven_pose(delta)
 		return
-	if bool(get_meta("meal_stepping_aside", false)):
+	if bool(get_meta("meal_stepping_aside", false)) and not _eating:
 		_play_anim("walk")
 		_apply_bobble(true)
 		return
@@ -2523,6 +2533,11 @@ func _advance_customer(delta: float) -> void:
 	if is_leaving:
 		_update_sidewalk_leave(delta)
 		_avoid_visiting_cat(delta)
+		return
+
+	if _eating:
+		_update_eat_pose()
+		_animate_expression(delta)
 		return
 
 	var dx: float = target_x - global_position.x
@@ -2654,6 +2669,10 @@ func _update_host_driven_pose(delta: float) -> void:
 		var yaw_t: float = clampf(delta * 12.0, 0.0, 1.0)
 		rotation_degrees.y = rad_to_deg(lerp_angle(deg_to_rad(rotation_degrees.y), deg_to_rad(_mp_target_yaw), yaw_t))
 	global_position.y = STAND_Y
+	if _eating:
+		_update_eat_pose()
+		_animate_expression(delta)
+		return
 	if Time.get_ticks_msec() - _mp_animation_received_ms < 1200:
 		_animate_expression(delta)
 		return
@@ -5291,3 +5310,20 @@ func _avoid_visiting_cat(delta: float) -> void:
 			var amount := 1.0 - smoothstep(radius*.45,radius+.5,gap)
 			target_z = lerpf(target_z,cat.global_position.z+radius+.25,amount)
 	global_position.z = move_toward(global_position.z,target_z,delta*2.8)
+
+func pet_cat() -> void:
+	if _eating or is_leaving or is_ragdoll or not is_waiting: return
+	_cat_pet_left=1.6
+	_play_anim("idle")
+	if _anim_player: _anim_player.stop()
+	_cache_panic_bones()
+
+func _apply_cat_pet_pose() -> void:
+	_cache_panic_bones()
+	if _skeleton==null:return
+	var t:=1.6-_cat_pet_left
+	var weight:=smoothstep(0.0,.25,t)*smoothstep(0.0,.25,_cat_pet_left)
+	_set_panic_bone_rot("RightArm",Vector3(-.65,0.0,1.0)*weight)
+	_set_panic_bone_rot("RightForeArm",Vector3(-.45+sin(t*9.0)*.14,0.0,.15)*weight)
+	_set_panic_bone_rot("RightHand",Vector3(.2+sin(t*9.0)*.2,0.0,0.0)*weight)
+	_set_panic_bone_rot("Chest",Vector3(.10,0.0,-.06)*weight)

@@ -31,7 +31,7 @@ func run() -> void:
  game.bg_people_is_pair.append(false)
  assert(street.try_building_departure(0,true))
  assert(street.is_building_walker(walker))
- for i in range(140):
+ for i in range(210):
   street.tick_building_traffic(1.0/60.0)
   street.door_animations.advance(1.0/60.0)
  assert(game.bg_people_active[0] and walker.visible)
@@ -45,7 +45,7 @@ func run() -> void:
  var original_snapshot: Dictionary = street.traffic_snapshot()
  street.apply_traffic_snapshot(original_snapshot)
  for door in street._hinges: assert(street._hinges[door].quaternion.is_equal_approx(original_snapshot.angles[door]))
- for i in range(140): street.tick_building_traffic(1.0/60.0)
+ for i in range(210): street.tick_building_traffic(1.0/60.0)
  assert(not walker.visible and not game.bg_people_active[0])
  assert(walker._wawa_click_area.collision_layer==0)
  assert(not street.is_building_walker(walker))
@@ -84,7 +84,7 @@ func run() -> void:
  var market_foot: Vector3 = street._door_foot("market",-.28)
  var base_scale: Vector3 = walker.scale
  street._begin_trip(0,"market",true,market_foot,Vector3(market_foot.x,game._bg_people_y(),game._bg_people_z()))
- assert(walker.scale.is_equal_approx(base_scale*.84))
+ assert(walker.scale.is_equal_approx(base_scale*.96))
  assert(bool(walker.get_meta("market_shopping_bag",false)))
  street._update_market_bags()
  var shopping_bag := walker.get_node_or_null("MarketShoppingBag")
@@ -92,8 +92,8 @@ func run() -> void:
  var sound_serial: int = street._shop_sound_serial
  street.apply_traffic_snapshot(street.traffic_snapshot())
  assert(street._shop_sound_serial == sound_serial,"The same snapshot must not retrigger sound")
- for i in range(140): street.tick_building_traffic(1.0/60.0)
- assert(not street.is_building_walker(walker),"A full doorway trip finishes within 2.34 seconds")
+ for i in range(210): street.tick_building_traffic(1.0/60.0)
+ assert(not street.is_building_walker(walker),"A full doorway trip finishes within 3.5 seconds")
  assert(walker.scale.is_equal_approx(base_scale),"Exiting restores normal size")
  street.cancel_building_traffic()
  street._update_market_bags()

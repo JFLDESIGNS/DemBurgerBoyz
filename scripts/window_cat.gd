@@ -8,7 +8,7 @@ const CAT_COLLISION_LAYER := 128
 const HOME_X := 0.4192 # Grubbah pickup ledge.
 ## Tutorial composition: farther screen-left, opposite the tutorial customer.
 const TUTORIAL_COACH_X := 2.1548
-const HOME_Z := 2.85 # Pop up behind the pickup ledge.
+const HOME_Z := 2.45 # Pop up behind the pickup ledge.
 ## Under the sill when hidden; peek high enough to clear the ledge.
 const HIDDEN_Y := 0.0902
 ## Counter peek lowered a further two inches (0.0508 world meters).
@@ -584,6 +584,7 @@ func get_mp_sync() -> Dictionary:
 		"treat": _treat_arm,
 		"eat_w": _patty_eat_wide,
 		"bob": _bob,
+		"purring": _purr_left>0.0,
 		"bird_gaze": get_meta("social_look",Vector3.ZERO),
 		"bird_gaze_active": _state in ["bird_approach","bird_pounce","bird_retreat"] or Time.get_ticks_msec() < int(get_meta("social_look_until",0)),
 		"presentation": {"fed":_visit_fed,"mouth":is_instance_valid(_mouth_burger),"lift":float(get_meta("steal_lean_lift",0.0)),"lean":_visual.rotation.x if is_instance_valid(_visual) else 0.0,"bites":floorf((1.0-clampf(_timer/RUN_SEC,0.0,1.0))*4.5) if _state=="running" else 0.0},
@@ -615,6 +616,7 @@ func apply_mp_sync(d: Dictionary) -> void:
 	_treat_arm = float(d.get("treat", _treat_arm))
 	_patty_eat_wide = float(d.get("eat_w", _patty_eat_wide))
 	_bob = float(d.get("bob", _bob))
+	if bool(d.get("purring",false)) and _purr_left<.2: start_purr()
 	set_meta("social_look",d.get("bird_gaze",Vector3.ZERO))
 	set_meta("social_look_until",Time.get_ticks_msec()+300 if bool(d.get("bird_gaze_active",false)) else 0)
 	var presentation: Dictionary=d.get("presentation",{})
@@ -752,6 +754,17 @@ func _process(delta: float) -> void:
 				else:
 					_state = "lowering"
 					_timer = 0.5
+		"social_rub":
+			var person=get_meta("rub_customer").get_ref()
+			if not _is_first_ordering_customer(person):
+				_state="peek";_timer=2.0;position=_run_from
+			else:
+				var u:=clampf(1.0-_timer/2.4,0.0,1.0)
+				var blend:=smoothstep(0.0,.25,u)*(1.0-smoothstep(.72,1.0,u))
+				position=_run_from.lerp(_run_to,blend)
+				position.x+=sin(u*TAU*2.0)*.045*blend
+				rotation_degrees.y=_yaw_look(global_position,person.global_position)+sin(u*TAU)*8.0
+				if _timer<=0.0: _state="peek";_timer=2.0;position=_run_from
 		"social_swat":
 			var u := 1.0-clampf(_timer/.55,0,1)
 			position = _run_from.lerp(_run_to,smoothstep(0,1,u))
@@ -763,10 +776,10 @@ func _process(delta: float) -> void:
 					audio.play_cat_cartoon_smack()
 					audio.play_cat_begging_meow(1.15)
 				var person = get_meta("swat_customer").get_ref()
-				if is_instance_valid(person):
+				if _is_first_ordering_customer(person):
 					person.shake_angry(.4,.04,1.0)
 					if is_instance_valid(game._customer_social): game._customer_social.wawa(person,1.2)
-				if is_instance_valid(game) and game.mp_enabled and NetManager.is_host() and NetManager.is_online() and is_instance_valid(game._customer_social):
+				if is_instance_valid(game) and game.mp_enabled and NetManager.is_host() and NetManager.is_online() and is_instance_valid(game._customer_social) and _is_first_ordering_customer(person):
 					game._customer_social.cat_smack.rpc(game._customer_net_id(person))
 				_social_run_away()
 		"delivery_turning":
@@ -1222,6 +1235,8 @@ func peek_for_patty(at_x: float) -> void:
 	rotation_degrees = Vector3(0, FACE_COOK_YAW, 0)
 
 func react_to_customer(customer: Node3D, friendly: bool) -> void:
+	if not is_instance_valid(customer) or customer._eating: return
+	if not friendly and not _is_first_ordering_customer(customer): return
 	if _state != "peek" or _delivery_peek_active or _visit_fed: return
 	if friendly:
 		_burst_hearts()
@@ -1288,17 +1303,6 @@ func _update_wildlife(delta: float, game: Node) -> bool:
 			position.x+=delta*1.55*_background_direction
 			position.y=game._bg_people_y()+absf(sin(_bob*8.0))*.075
 			rotation.y=PI*.5*_background_direction
-			if not _background_attacked:
-				for i in game.bg_people.size():
-					var walker=game.bg_people[i]
-					if not is_instance_valid(walker) or not walker.visible or position.distance_to(walker.position)>1.4:continue
-					_background_attacked=true
-					if randf()<.45:
-						_run_from=position;_run_to=position+(walker.position-position).limit_length(.85);_run_to.y=position.y
-						_state="background_pounce";_timer=.65
-						if game.mp_enabled and NetManager.is_online():background_attack.rpc(i)
-						else:background_attack(i)
-					break
 			if absf(position.x)>game.BG_PEOPLE_EDGE_X+2.0:
 				_state="hidden";visible=false;_timer=REPEEK_SEC;_background_wait=randf_range(65,105)
 		return true
@@ -1358,13 +1362,9 @@ func _update_wildlife(delta: float, game: Node) -> bool:
 	return false
 
 @rpc("authority", "call_local", "reliable")
-func background_attack(walker_index: int) -> void:
-	var game=get_tree().current_scene
-	if not is_instance_valid(game):return
-	if is_instance_valid(game.game_audio):game.game_audio.play_cat_meow(.5)
-	if walker_index>=0 and walker_index<game.bg_people.size():
-		var walker=game.bg_people[walker_index]
-		if is_instance_valid(walker):walker.shake_angry(.65,.045,1.0)
+func background_attack(_walker_index: int) -> void:
+	pass # Background walkers are no longer swat targets.
+
 
 ## Only the street walker casts a window blob; counter and courier visits do not.
 func window_shadow_size() -> Vector2:
@@ -1383,3 +1383,17 @@ func _begin_bird_approach(target: Node3D) -> void:
 	_run_to.y=position.y
 	_state="bird_approach";_timer=.95
 	target.hold_for_cat()
+
+func _is_first_ordering_customer(person: Node3D) -> bool:
+	var game=get_tree().current_scene
+	return is_instance_valid(person) and not person._eating and is_instance_valid(game) and is_instance_valid(game._customer_social) and game._customer_social.first_ordering_customer()==person
+
+func rub_customer(person: Node3D) -> void:
+	if _state!="peek" or not _is_first_ordering_customer(person):return
+	_state="social_rub";_timer=2.4
+	_run_from=position
+	_run_to=get_parent().to_local(person.global_position+Vector3(.43,0,.05))
+	_run_to.y=position.y
+	set_meta("rub_customer",weakref(person))
+	start_purr()
+	_burst_hearts()

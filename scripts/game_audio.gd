@@ -1757,9 +1757,9 @@ func play_spatula_drum(pad: int = 2, volume_scale: float = 1.0, voice: int = 0) 
 	## HOLD-zone taps. voice: 0 = drum · 1 = closed hi-hat · 2 = open hat / rim.
 	if _players.is_empty():
 		return
-	# Double the current drum level and restore the original layered metal hit.
-	var metal_volume := maxf(0.0, volume_scale) * 2.0
-	volume_scale *= 4.8
+	# Keep the metal tap clear while the drum layer sits lower.
+	var metal_volume := maxf(0.0, volume_scale) * 2.6
+	volume_scale *= 3.36
 	var p_i := clampi(pad, 0, 4)
 	var v := clampi(voice, 0, 2)
 	var key := "hold_kit_v5_%d_%d" % [v, p_i]
