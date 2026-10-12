@@ -3976,7 +3976,7 @@ func start_slingshot_stretch(owner_node: Node = null) -> AudioStreamPlayer:
 	recording.loop_offset = 0.0
 	player.stream = recording
 	player.bus = "SFX"
-	player.volume_db = _sfx_db(3.0 + linear_to_db(0.8 * 0.7 * 0.7 * .65),"ingredients")
+	player.volume_db = _sfx_db(3.0 + linear_to_db(0.8 * 0.7 * 0.7 * .65 * .5),"ingredients")
 	(owner_node if is_instance_valid(owner_node) else self).add_child(player)
 	player.play()
 	return player
