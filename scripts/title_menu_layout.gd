@@ -32,19 +32,6 @@ func setup(game: Node) -> void:
  game.tutorial_btn.text = "CAT TUTORIAL"
  _button(game.tutorial_btn,Vector2(85,710),Vector2(283,78),Color("EDB64D"),Color("704323"),24,2)
  _button(creator,Vector2(379,708),Vector2(303,72),Color("B5D6CB"),Color("20575B"),24,3)
- var cat := TextureRect.new()
- cat.name="ForegroundCat"
- var cat_atlas:=AtlasTexture.new()
- cat_atlas.atlas=preload("res://assets/ui/title_black_cat.png")
- cat_atlas.region=cat_atlas.atlas.get_image().get_used_rect()
- cat.texture=cat_atlas
- cat.expand_mode=TextureRect.EXPAND_IGNORE_SIZE
- cat.stretch_mode=TextureRect.STRETCH_KEEP_ASPECT_CENTERED
- cat.position=Vector2(695,660)
- cat.size=Vector2(270,245)
- cat.z_index=5
- cat.mouse_filter=Control.MOUSE_FILTER_IGNORE
- stage.add_child(cat)
  old.hide()
  resized.connect(_layout)
  _layout()
