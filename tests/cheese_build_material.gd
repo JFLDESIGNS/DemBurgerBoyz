@@ -13,7 +13,7 @@ func run():
  var patty = BuildPattyProbe.new()
  game.add_child(patty)
  patty.cheese_melt = 1.0
- patty.cheese_effect_age = 5.0
+ patty.cheese_effect_age = 1.0
  var st: Dictionary = game.stations[game.STATION_CRAFT]
  st.items = ["bun_bottom", "patty", "cheese"] as Array[String]
  st.patties = [patty]
@@ -24,8 +24,14 @@ func run():
   assert(sprite.material == blend.material, "Build refresh cleared the cheese shader")
   assert(float(sprite.material.get_shader_parameter("wobble_amount")) > .6)
   assert(st.layer_pool[0].get_node("LayerTexture").material == load("res://shaders/build_bun_color.tres"))
+ # Rebuilding an old burger must not restart the seven-second effect.
+ patty.cheese_effect_age = 7.0
+ game._refresh_station(game.STATION_CRAFT)
  var sprite: TextureRect = st.layer_pool[1].get_node("LayerTexture")
  var blend = sprite.get_node("CheeseBlend")
+ assert(is_zero_approx(float(sprite.material.get_shader_parameter("wobble_amount"))))
+ patty.cheese_effect_age = 1.0
+ blend._process(0.0)
  blend.set_process(false)
  if DisplayServer.get_name() != "headless":
   # Render the actual refreshed build sprite in isolation to measure its motion.

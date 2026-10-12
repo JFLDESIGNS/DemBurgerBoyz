@@ -20,12 +20,15 @@ func run():
 	var sprite=TextureRect.new();g.add_child(sprite)
 	var blend=load("res://scripts/build_cheese_blend.gd").new();sprite.add_child(blend);blend.setup(p)
 	assert(is_zero_approx(blend.wobble_envelope(0.0)))
-	assert(is_equal_approx(blend.wobble_envelope(1.0),1.0))
-	assert(is_equal_approx(blend.wobble_envelope(2.0),1.0))
-	assert(is_equal_approx(blend.wobble_envelope(3.0),1.0))
-	assert(is_equal_approx(blend.wobble_envelope(3.5),1.0))
-	assert(blend.wobble_envelope(4.0)>0 and blend.wobble_envelope(4.0)<1)
-	assert(blend.wobble_envelope(5.0)>.6,"Wobble remains visible after melting")
+	assert(is_equal_approx(blend.wobble_envelope(1.0),.65),"Peak is 35 percent gentler")
+	var previous := .65
+	for tick in range(11, 71):
+		var amount: float = blend.wobble_envelope(float(tick)/10.0)
+		assert(amount <= previous,"Wobble must steadily settle")
+		previous = amount
+	assert(blend.wobble_envelope(6.5)<.02,"Barely moving near the end")
+	assert(is_zero_approx(blend.wobble_envelope(7.0)))
+	assert(is_zero_approx(blend.wobble_envelope(20.0)),"No wobble after seven seconds")
 	var region:Rect2=(blend.frames[0] as AtlasTexture).region
 	for frame in blend.frames: assert((frame as AtlasTexture).region==region,"Melt states must share a fixed anchor")
 	p.cheese_effect_age=.6;blend._process(0)

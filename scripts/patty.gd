@@ -976,7 +976,7 @@ func _process(delta: float) -> void:
 	if has_cheese:
 		if cheese_melt < 1.0 and not mp_puppet:
 			cheese_melt = minf(1.0, cheese_melt + delta / CHEESE_MELT_TIME)
-		cheese_effect_age = minf(5.0, cheese_effect_age + delta)
+		cheese_effect_age = minf(7.0, cheese_effect_age + delta)
 		## Keep checking orientation after the melt completes. Juggle flips rotate
 		## the whole patty, so a stale visible flag made cheese show underneath.
 		_update_cheese_visual()
