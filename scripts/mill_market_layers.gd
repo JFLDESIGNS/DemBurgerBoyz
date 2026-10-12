@@ -53,6 +53,7 @@ func _layer(node_name: String, texture_name: String, depth: float) -> MeshInstan
  var quad := QuadMesh.new()
  quad.size = Vector2(20.48, 11.53)
  node.mesh = quad
+ node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
  var material := StandardMaterial3D.new()
  material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
  material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
@@ -87,6 +88,7 @@ func close_door(door: String = "both") -> void:
 func _painted_materials(node: Node) -> void:
  if node is MeshInstance3D:
   var mesh_node := node as MeshInstance3D
+  mesh_node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
   for i in mesh_node.mesh.get_surface_count():
    var source := mesh_node.get_active_material(i) as StandardMaterial3D
    if source == null: continue
@@ -123,3 +125,97 @@ func _update_canopy_depth() -> void:
  if absf(distance) < 0.1: return
  var ratio := clampf((target_z - camera.global_position.z) / distance, 0.1, 1.0)
  canopy.global_transform = Transform3D(back.basis.scaled(Vector3.ONE * ratio), camera.global_position + (back.origin - camera.global_position) * ratio)
+
+# Only the host chooses doorway traffic; snapshots carry the complete poses and door angles.
+var _trip: Dictionary = {}
+var _traffic_wait := 10.0
+
+func _door_foot(door: String, depth: float = 0.12) -> Vector3:
+ var pixel := Vector2(1070, 930) if door == "old_poodle" else Vector2(1452, 929)
+ return to_global(Vector3((pixel.x - 1024.0) / 100.0, (576.5 - pixel.y) / 100.0, depth))
+
+func is_building_walker(walker: Node) -> bool:
+ return bool(walker.get_meta("building_trip", false))
+
+func try_building_departure(idx: int, force: bool = false) -> bool:
+ if not is_instance_valid(_game) or not _trip.is_empty(): return false
+ if _game.mp_enabled and not NetManager.is_host(): return false
+ if not force and (_traffic_wait > 0.0 or randf() > 0.28): return false
+ var walker: Node3D = _game.bg_people[idx]
+ if bool(walker.get_meta("grisaldi", false)) or bool(walker.get_meta("grisaldi_claimed", false)): return false
+ var door := "old_poodle" if randf() < 0.5 else "motel"
+ var from := _door_foot(door, -0.28)
+ var to := Vector3(from.x + float(_game.bg_people_dir[idx]) * 0.8, _game._bg_people_y(), _game._bg_people_z())
+ _begin_trip(idx, door, true, from, to)
+ return true
+
+func _begin_trip(idx: int, door: String, departing: bool, from: Vector3, to: Vector3) -> void:
+ var walker: Node3D = _game.bg_people[idx]
+ walker.set_meta("building_trip", true)
+ walker._wawa_click_area.collision_layer = 0
+ walker.global_position = from
+ walker.rotation.y = atan2(to.x - from.x, to.z - from.z)
+ _trip = {"index": idx, "door": door, "departing": departing, "time": 0.0, "from": from, "to": to, "closed": false}
+ open_door(door)
+
+func cancel_building_traffic() -> void:
+ if is_instance_valid(_game):
+  for walker in _game.bg_people:
+   if is_instance_valid(walker): walker.set_meta("building_trip", false)
+ _trip.clear()
+ _traffic_wait = 10.0
+ door_animations.stop()
+ for hinge in _hinges.values(): hinge.quaternion = Quaternion.IDENTITY
+
+func tick_building_traffic(delta: float) -> void:
+ if not is_instance_valid(_game): return
+ if _game.mp_enabled and not NetManager.is_host(): return
+ if not _trip.is_empty():
+  var idx := int(_trip["index"])
+  if idx >= _game.bg_people.size() or not bool(_game.bg_people_active[idx]):
+   cancel_building_traffic()
+   return
+  var walker: Node3D = _game.bg_people[idx]
+  _trip["time"] = float(_trip["time"]) + delta
+  var elapsed := float(_trip["time"])
+  var u := clampf((elapsed - 0.85) / 2.6, 0.0, 1.0)
+  walker.global_position = (_trip["from"] as Vector3).lerp(_trip["to"], u)
+  if u >= 1.0 and not bool(_trip["closed"]):
+   _trip["closed"] = true
+   close_door(str(_trip["door"]))
+   if not bool(_trip["departing"]):
+    walker.visible = false
+    walker._wawa_click_area.collision_layer = 0
+  if elapsed >= 4.4:
+   walker.set_meta("building_trip", false)
+   if bool(_trip["departing"]):
+    walker._wawa_click_area.collision_layer = _game.CUSTOMER_WAWA_COLLISION_LAYER
+    walker.rotation_degrees.y = 90.0 if float(_game.bg_people_dir[idx]) > 0 else -90.0
+   else:
+    _game.bg_people_active[idx] = false
+    _game.bg_people_wait[idx] = randf_range(8.0, 15.0)
+   _trip.clear()
+   _traffic_wait = randf_range(12.0, 22.0)
+  return
+ _traffic_wait -= delta
+ if _traffic_wait > 0.0: return
+ for idx in _game.bg_people.size():
+  if not bool(_game.bg_people_active[idx]) or bool(_game.bg_people_is_run[idx]) or bool(_game.bg_people_is_pair[idx]): continue
+  var walker: Node3D = _game.bg_people[idx]
+  if bool(walker.get_meta("grisaldi", false)) or bool(walker.get_meta("grisaldi_claimed", false)) or str(walker.get_meta("street_hail", "")) != "": continue
+  if int(walker.get_meta("food_stop_until", 0)) > Time.get_ticks_msec(): continue
+  for door in ["old_poodle", "motel"]:
+   var foot := _door_foot(door, -0.28)
+   if absf(walker.global_position.x - foot.x) < 0.4:
+    _begin_trip(idx, door, false, walker.global_position, foot)
+    return
+
+func traffic_snapshot() -> Dictionary:
+ var angles := {}
+ for door in _hinges: angles[door] = _hinges[door].quaternion
+ return {"angles": angles}
+
+func apply_traffic_snapshot(data: Dictionary) -> void:
+ door_animations.stop()
+ for door in data.get("angles", {}):
+  if _hinges.has(door): _hinges[door].quaternion = data["angles"][door]

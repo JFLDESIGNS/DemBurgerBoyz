@@ -25,7 +25,7 @@ for name,pts in windows:
  im=bpy.data.images.load(str(OUT/(name+'.png')),check_existing=False);a=pixels(im);h,w=a.shape[:2];x0=int(min(p[0] for p in pts)*sx);y0=int(min(p[1] for p in pts)*sy)
  is_upper=any(k in name for k in ['Upper','Top','Middle']);door=name in ['Poodle_Door_Glass','Motel_Door']
  if not is_upper:
-  v=np.linspace(0,1,h)[:,None];blend=np.clip((v-.22)/.78,0,1);blend=blend*blend*(3-2*blend)*.84;a[:,:,:3]=a[:,:,:3]*(1-blend[:,:,None])+np.array([.72,.53,.30])*blend[:,:,None]
+  v=np.linspace(0,1,h)[:,None];blend=np.clip((v-.62)/.38,0,1);blend=blend*blend*(3-2*blend)*.84;a[:,:,:3]=a[:,:,:3]*(1-blend[:,:,None])+np.array([.35,.25,.14])*blend[:,:,None]
  fresh=image(name+'_glass',a,False);ob=bpy.data.objects[name+'_GLASS'];m=ob.data.materials[0];n=m.node_tree.nodes;l=m.node_tree.links;tex=next(t for t in n if t.type=='TEX_IMAGE');tex.image=fresh;emit=next(t for t in n if t.type=='EMISSION');l.new(tex.outputs['Color'],emit.inputs['Color'])
  if is_upper:
   uv=n.new('ShaderNodeTexCoord');mapping=n.new('ShaderNodeMapping');l.new(uv.outputs['UV'],mapping.inputs[0]);mapping.inputs['Scale'].default_value=(w/W*3,h/H*2,1)

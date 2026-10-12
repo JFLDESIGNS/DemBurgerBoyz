@@ -27,3 +27,7 @@ Export script: models/mill_market_cutouts/export_godot_layers.py
 Game API: get_street_effect_mask("windows"), "upper_windows", "street_windows", "doors", or "canopy" returns a Texture2D.
 Game API: play_street_door_animation("both_open") or any of the six animation names above.
 In the game the canopy is projected ahead of the existing walker lane while preserving its exact screen alignment.
+
+Occasional host-controlled walkers enter and leave the two buildings. Multiplayer snapshots synchronize doorway travel, visibility, facing, and door poses.
+All scenery layers have shadow casting disabled to avoid rectangular shadows over the painted street.
+The warm gradient is limited to the bottom 38 percent of street-level glass, with a darker amber base.

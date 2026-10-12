@@ -1,0 +1,55 @@
+extends SceneTree
+class Walker extends Node3D:
+ var _wawa_click_area := Area3D.new()
+ func _init() -> void: add_child(_wawa_click_area)
+func _initialize() -> void: call_deferred("run")
+func no_shadows(node: Node) -> void:
+ if node is MeshInstance3D: assert(node.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_OFF)
+ for child in node.get_children(): no_shadows(child)
+func run() -> void:
+ create_timer(25).timeout.connect(func(): quit(1))
+ var game = load("res://scenes/main.tscn").instantiate()
+ game.set_script(load("res://tests/main_ticket_harness.gd"))
+ root.add_child(game); current_scene = game
+ game.street_matte = MeshInstance3D.new()
+ game.street_matte.position = Vector3(0,3.5,11.5)
+ game.street_matte.rotation.y = PI
+ game.world.add_child(game.street_matte)
+ game._sync_mill_market_layers(game.STREET_BG_MILL1_PATH)
+ var street = game._mill_market_layer()
+ no_shadows(street)
+ var walker := Walker.new()
+ game.world.add_child(walker)
+ game.bg_people.append(walker)
+ game.bg_people_active.append(true)
+ game.bg_people_wait.append(0.0)
+ game.bg_people_dir.append(1.0)
+ game.bg_people_is_run.append(false)
+ game.bg_people_is_pair.append(false)
+ assert(street.try_building_departure(0,true))
+ assert(street.is_building_walker(walker))
+ for i in range(270):
+  street.tick_building_traffic(1.0/60.0)
+  street.door_animations.advance(1.0/60.0)
+ assert(game.bg_people_active[0] and walker.visible)
+ assert(not street.is_building_walker(walker))
+ assert(absf(walker.global_position.z-game._bg_people_z())<.01)
+ street._traffic_wait=0.0
+ var foot: Vector3=street._door_foot("old_poodle",-.28)
+ walker.global_position=Vector3(foot.x,game._bg_people_y(),game._bg_people_z())
+ street.tick_building_traffic(.01)
+ assert(street.is_building_walker(walker))
+ var original_snapshot: Dictionary = street.traffic_snapshot()
+ street.apply_traffic_snapshot(original_snapshot)
+ for door in street._hinges: assert(street._hinges[door].quaternion.is_equal_approx(original_snapshot.angles[door]))
+ for i in range(270): street.tick_building_traffic(1.0/60.0)
+ assert(not walker.visible and not game.bg_people_active[0])
+ assert(walker._wawa_click_area.collision_layer==0)
+ assert(not street.is_building_walker(walker))
+ game.bg_people_active[0]=true;walker.visible=true
+ assert(street.try_building_departure(0,true))
+ street.cancel_building_traffic()
+ assert(not street.is_building_walker(walker) and street._trip.is_empty())
+ print("MILL_BUILDING_TRAFFIC_OK: entry, exit, cancellation, replicated angles, no background shadows")
+ await process_frame
+ quit()

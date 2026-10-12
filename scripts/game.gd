@@ -31352,6 +31352,7 @@ func _start_background_person(idx: int, as_partner: bool = false) -> void:
 		0.0
 	)
 	walker.visible = true
+	walker.set_meta("building_trip", false)
 	walker.set_meta("street_hail", "")
 	walker.set_meta("street_hail_time", 0.0)
 	walker._wawa_click_area.collision_layer = CUSTOMER_WAWA_COLLISION_LAYER
@@ -31363,6 +31364,10 @@ func _start_background_person(idx: int, as_partner: bool = false) -> void:
 		walker.call("play_street_walk", gait)
 	if mp_enabled and NetManager.is_host() and not _mp_applying:
 		mp_background_person_start.rpc(idx, preset, dir, is_run, as_partner, float(bg_people_speed[idx]))
+	var building := _mill_market_layer()
+	if building != null and not as_partner and not is_run and building.try_building_departure(idx):
+		_mp_send_background_people_snapshot()
+		return
 	## Occasional pair of walkers — never pair a runner, never go over 2 on screen.
 	if as_partner or is_run or randf() >= BG_PEOPLE_PAIR_CHANCE:
 		return
@@ -31401,6 +31406,7 @@ func mp_background_person_start(idx: int, preset: Dictionary, dir: float, is_run
 	walker.scale = Vector3.ONE * _bg_people_scale()
 	walker.rotation_degrees = Vector3(0.0, CustomerScript.WALK_PLUS_X_YAW if dir > 0.0 else CustomerScript.WALK_MINUS_X_YAW, 0.0)
 	walker.visible = true
+	walker.set_meta("building_trip", false)
 	walker.set_meta("street_hail", "")
 	walker.set_meta("street_hail_time", 0.0)
 	walker._wawa_click_area.collision_layer = CUSTOMER_WAWA_COLLISION_LAYER
@@ -31426,23 +31432,30 @@ func _mp_send_background_people_snapshot(peer_id: int = 0) -> void:
 	var active: Array = []
 	var xs: Array = []
 	var zs: Array = []
+	var poses: Array = []
+	var building := _mill_market_layer()
 	for i in bg_people.size():
 		var walker := bg_people[i] as Node3D
 		var on := i < bg_people_active.size() and bool(bg_people_active[i]) and walker != null and is_instance_valid(walker)
 		active.append(on)
 		xs.append(float(walker.position.x) if on else 0.0)
 		zs.append(float(walker.position.z) if on else 0.0)
+		poses.append({"y": walker.position.y, "yaw": walker.rotation.y, "trip": bool(walker.get_meta("building_trip", false)), "visible": walker.visible} if on else {})
+	var detail := {"poses": poses, "doors": building.traffic_snapshot() if building != null else {}}
 	if peer_id > 0:
-		mp_background_people_snapshot.rpc_id(peer_id, active, xs, zs)
+		mp_background_people_snapshot.rpc_id(peer_id, active, xs, zs, detail)
 	else:
-		mp_background_people_snapshot.rpc(active, xs, zs)
+		mp_background_people_snapshot.rpc(active, xs, zs, detail)
 
 
 @rpc("authority", "call_remote", "unreliable_ordered")
-func mp_background_people_snapshot(active: Array, xs: Array, zs: Array) -> void:
+func mp_background_people_snapshot(active: Array, xs: Array, zs: Array, detail: Dictionary = {}) -> void:
 	if _hotdog_active(): return
 	if NetManager.is_host():
 		return
+	var building := _mill_market_layer()
+	if building != null: building.apply_traffic_snapshot(detail.get("doors", {}))
+	var poses: Array = detail.get("poses", [])
 	for i in mini(bg_people.size(), active.size()):
 		var walker := bg_people[i] as Node3D
 		if walker == null or not is_instance_valid(walker):
@@ -31454,7 +31467,12 @@ func mp_background_people_snapshot(active: Array, xs: Array, zs: Array) -> void:
 			continue
 		if not bool(bg_people_active[i]):
 			continue ## Reliable start carries the matching character before poses apply.
-		var target := Vector3(float(xs[i]), _bg_people_y(), float(zs[i]))
+		var pose: Dictionary = poses[i] if i < poses.size() else {}
+		walker.set_meta("building_trip", bool(pose.get("trip", false)))
+		walker.visible = bool(pose.get("visible", true))
+		walker._wawa_click_area.collision_layer = 0 if bool(pose.get("trip", false)) or not walker.visible else CUSTOMER_WAWA_COLLISION_LAYER
+		walker.rotation.y = lerp_angle(walker.rotation.y, float(pose.get("yaw", walker.rotation.y)), 0.68)
+		var target := Vector3(float(xs[i]), float(pose.get("y", _bg_people_y())), float(zs[i]))
 		walker.position = walker.position.lerp(target, 0.68)
 
 
@@ -31467,7 +31485,9 @@ func _update_background_people(delta: float) -> void:
 	var s := _bg_people_scale()
 	var speed_mul := clampf(_gfx_float("bg_people_speed", 1.0), 0.25, 2.5)
 	var gap_mul := clampf(_gfx_float("bg_people_gap", 1.0), 0.2, 3.5)
+	var building := _mill_market_layer()
 	if not playing or options_menu_open or shift_paused:
+		if building != null: building.cancel_building_traffic()
 		for i in bg_people.size():
 			var idle := bg_people[i] as Node3D
 			if idle != null and is_instance_valid(idle):
@@ -31478,6 +31498,7 @@ func _update_background_people(delta: float) -> void:
 			if i < bg_people_pass_blend.size():
 				bg_people_pass_blend[i] = 0.0
 		return
+	if building != null: building.tick_building_traffic(delta)
 	for i in bg_people.size():
 		var walker := bg_people[i] as Node3D
 		if walker == null or not is_instance_valid(walker):
@@ -31496,6 +31517,7 @@ func _update_background_people(delta: float) -> void:
 				continue
 			_start_background_person(i)
 			continue
+		if building != null and building.is_building_walker(walker): continue
 		if int(walker.get_meta("food_stop_until",0)) > Time.get_ticks_msec(): continue
 		if int(walker.get_meta("food_stop_until",0)) > 0:
 			walker.set_meta("food_stop_until",0);walker.play_street_walk()
@@ -81488,6 +81510,7 @@ func _sync_mill_market_layers(background_path: String) -> void:
 		if original_material != null: original_material.albedo_texture = null
 	else:
 		if layered != null:
+			layered.cancel_building_traffic()
 			street_matte.remove_child(layered)
 			layered.queue_free()
 		if street_matte.mesh == null:
@@ -81505,3 +81528,7 @@ func play_street_door_animation(animation_name: String) -> void:
 	var layered := street_matte.get_node_or_null("MillMarketLayers")
 	if layered != null and layered.door_animations.has_animation(animation_name):
 		layered.door_animations.play(animation_name)
+
+
+func _mill_market_layer() -> Node3D:
+	return street_matte.get_node_or_null("MillMarketLayers") as Node3D if is_instance_valid(street_matte) else null
