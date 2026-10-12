@@ -31201,7 +31201,7 @@ func _bg_people_y() -> float:
 
 
 func _bg_people_scale() -> float:
-	return clampf(_gfx_float("bg_people_scale", 0.92), 0.35, 1.8) * 0.85
+	return clampf(_gfx_float("bg_people_scale", 0.92), 0.35, 1.8) * 0.918
 
 
 func _bg_people_lane_dir() -> float:
