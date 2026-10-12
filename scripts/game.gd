@@ -4115,10 +4115,21 @@ func _run_comprehensive_gameplay_load() -> void:
 		_menu_truck.departure_darkness.disconnect(fade_call)
 		start_overlay.hide()
 	_show_gameplay_loading_screen()
-	if is_instance_valid(departure_cover):
-		var reveal := create_tween()
-		reveal.tween_property(departure_cover, "color:a", 0.0, .3)
-		reveal.tween_callback(departure_cover.queue_free)
+	if not is_instance_valid(departure_cover):
+		departure_cover = ColorRect.new()
+		departure_cover.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		departure_cover.mouse_filter = Control.MOUSE_FILTER_STOP
+		departure_cover.z_as_relative = false
+		departure_cover.z_index = 4096
+		get_node("UI/Root").add_child(departure_cover)
+	departure_cover.color = Color.BLACK
+	var circle_reveal := ShaderMaterial.new()
+	circle_reveal.shader = preload("res://shaders/loading_circle_reveal.gdshader")
+	circle_reveal.set_shader_parameter("progress", 0.0)
+	departure_cover.material = circle_reveal
+	var reveal := create_tween()
+	reveal.tween_method(func(value: float): circle_reveal.set_shader_parameter("progress", value), 0.0, 1.0, .8).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	reveal.tween_callback(departure_cover.queue_free)
 	_loading_screen_began_ms = Time.get_ticks_msec()
 	_loading_movie_count = 0
 	set_meta("loading_movie_durations_ms", [])
