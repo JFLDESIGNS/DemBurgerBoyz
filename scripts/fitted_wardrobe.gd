@@ -144,7 +144,7 @@ static func fitted_mesh(style: int, body_mesh: MeshInstance3D, body_root: Node3D
 static func fabric_material(authored: Material, tint: Color) -> ShaderMaterial:
 	var material := ShaderMaterial.new()
 	material.shader = PRINT_SHADER
-	if authored != null and "Grisaldi" in authored.resource_name:
+	if authored != null and ("Grisaldi tomato" in authored.resource_name or "Grisaldi charcoal" in authored.resource_name):
 		material.shader=preload("res://shaders/grisaldi_checker.gdshader")
 		return material
 	var color := Color.WHITE

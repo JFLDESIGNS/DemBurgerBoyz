@@ -1415,6 +1415,8 @@ func _select_character_animation(state: String) -> void:
 		_anim_player.play("kenney_offensive/Offensive")
 		_anim_player.speed_scale = 1.0
 		return
+	if state == "walk" and bool(get_meta("grisaldi",false)) and _anim_player.has_animation("burger/Grisaldi_Strut"):
+		_anim_player.play("burger/Grisaldi_Strut");_anim_player.speed_scale=1.0;return
 	if state == "walk" and _walk_anim_path != "" and _anim_player.has_animation(_walk_anim_path) \
 			and not _walk_anim_path.ends_with("/Run"):
 		_anim_player.play(_walk_anim_path)
@@ -5046,6 +5048,7 @@ func receive_burger(
 
 
 func release_serve_completion() -> void:
+	if bool(get_meta("grisaldi_photo_pending",false)):return
 	if not bool(get_meta("serve_commit_hold", false)):
 		return
 	set_meta("serve_commit_hold", false)

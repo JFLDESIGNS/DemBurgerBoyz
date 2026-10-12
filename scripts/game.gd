@@ -433,6 +433,7 @@ var tutorial_click_overlay: Control = null
 var _flash_tween: Tween = null
 var difficulty: float = 0.0
 var spawn_timer: float = 2.0
+var _grisaldi_bonus_pending: int = 0
 var customers: Array = []
 # Removed orders still occupy the sidewalk until their customer walks clear.
 var _customer_departure_holds: Array[Dictionary] = []
@@ -6107,7 +6108,7 @@ func _process_gameplay(delta: float) -> void:
 				spawn_timer -= delta
 			var cap := _customer_cap()
 			var waiting_n := _waiting_customer_count()
-			if (day_time > 10.0 or day1_needs_bts_sequence) and spawn_timer <= 0.0 and waiting_n < cap:
+			if (day_time > 10.0 or day1_needs_bts_sequence or _grisaldi_bonus_pending>0) and spawn_timer <= 0.0 and waiting_n < cap:
 				# if TERRORISTS_ENABLED and not terrorist_wave_active and day >= TERRORIST_MIN_DAY and randf() < TERRORIST_WAVE_CHANCE:
 				# 	_spawn_terrorist_wave()
 				# 	spawn_timer = _next_spawn_delay()
@@ -6116,14 +6117,13 @@ func _process_gameplay(delta: float) -> void:
 				elif _has_cut_collector() or _boss_pep_pending or _boss_intro_running:
 					pass
 				elif not _maybe_begin_bts_day1_performance():
-					_spawn_customer()
-					spawn_timer = _next_spawn_delay()
+					_spawn_scheduled_customer()
 
 	_update_challenge(delta)
 
 	rush_mode = _customer_cap() >= 3 and _waiting_customer_count() >= maxi(2, _customer_cap() - 1)
 
-	if not tutorial_mode and shift_closing and _regular_customers_empty():
+	if not tutorial_mode and shift_closing and _regular_customers_empty() and _grisaldi_bonus_pending<=0:
 		if _hotdog_active() or _hotdog_shift_due():
 			pass
 		elif _challenge_phase != "":
@@ -31319,7 +31319,7 @@ func _start_background_person(idx: int, as_partner: bool = false) -> void:
 	walker.set_meta("crowd_home_z", _bg_people_z() + (BG_PEOPLE_PAIR_Z if as_partner else 0.0))
 	var preset: Dictionary = CustomerScript.take_next_saved_character_preset()
 	if not preset.is_empty() and not as_partner and not _grisaldi_visits.has("%s:%d" % [current_location_id,day]):
-		preset.merge({"grisaldi":true,"top_color":"ffffffff","shoe_color":"e52d35ff","top_style":16,"top_catalog_version":1,"bottom_style":2,"bottom_catalog_version":1,"bottom_color":"244b32ff","hat_style":4,"hat_color":"ed2736ff","hair_style":0,"hair_color":"37291fff","facial_hair_style":2,"facial_hair_color":"37291fff","customer_voice":"male","glasses_style":0,"jewelry_style":0,"makeup_style":0,"shirt_graphic":0,"shoe_style":3,"hat_scale":1.0,"hat_offset":[0,0,0],"hat_rotation":[0,0,0]},true)
+		preset.merge({"grisaldi":true,"top_color":"ffffffff","shoe_color":"e52d35ff","top_style":16,"top_catalog_version":1,"bottom_style":2,"bottom_catalog_version":1,"bottom_color":"244b32ff","hat_style":7,"hat_color":"ed2736ff","hair_style":3,"hair_color":"37291fff","facial_hair_style":2,"facial_hair_color":"37291fff","customer_voice":"male","glasses_style":0,"jewelry_style":0,"makeup_style":0,"shirt_graphic":0,"shoe_style":3,"hat_scale":1.0,"hat_offset":[0,0,0],"hat_rotation":[0,0,0]},true)
 	if preset.is_empty():
 		bg_people_wait[idx] = 4.0
 		return
@@ -31707,6 +31707,7 @@ func mp_background_person_join(idx: int, nid: int, order: Array, preset: Diction
 	_spawn_customer_local(order,Color.WHITE,patience,lane,nid,-1,0,false,-1,false,preset,true)
 	var recruited = _customer_by_net_id(nid)
 	if is_instance_valid(recruited):
+		if bool(walker.get_meta("grisaldi",false)):_style_grisaldi(recruited,true)
 		recruited.set_meta("recruited_running",true)
 		recruited.play_street_run(1.25)
 
@@ -50953,6 +50954,10 @@ func _commit_social_review(
 			breakdown = (stored as Dictionary).duplicate(true)
 	if not breakdown.is_empty() and kind not in ["spray", "cat_burnt"]:
 		text = "My order: %s accuracy, %s, %s seasoning, %s freshness. %s. %s" % [breakdown.get("accuracy","—"), breakdown.get("doneness","—"), breakdown.get("seasoning","—"), breakdown.get("freshness","—"), breakdown.get("speed","—"), "I'd come back!" if stars >= 4.0 else ("Please get my next order right." if stars < 3.0 else "Okay, but there's room to improve.")]
+	if _is_grisaldi_guest(customer):
+		who="Grisaldi"
+		text="To all my viewers: go to Burger Pals! Great burger. I just boosted their socials!" if stars>=4.0 else "Tried Burger Pals today. This burger needs some work before I can recommend it to my viewers."
+		_grisaldi_reward(customer,stars)
 	if is_instance_valid(customer):
 		customer.set_meta("sales_review",text)
 		customer.set_meta("meal_stars",stars)
@@ -72430,6 +72435,10 @@ func _complete_serve(
 	if not guest_mp and (not result.get("missing",[]).is_empty() or bool(cust.get_meta("serve_missing_side",false))):
 		# One authoritative coin flip; force bypasses the usual review lottery.
 		deferred_review = {"stars":1.0,"kind":"wrong","tip":0,"force":true,"pic":cached_review_pic} if randf() < 0.5 else {}
+	if not guest_mp and _is_grisaldi_guest(cust):
+		if deferred_review.is_empty():deferred_review={"stars":1.0,"kind":"wrong","tip":0,"force":true,"pic":cached_review_pic}
+		cust.set_meta("grisaldi_photo_pending",true)
+		cust.set_meta("grisaldi_meal_review_ready",true)
 	cust.set_meta("meal_stars", float(deferred_review.get("stars", 0.0)))
 	if payout <= 0 and not guest_mp: _record_order_history(0,0,_order_food_cost(cust),cust)
 	if cached_review_pic != null:
@@ -72482,6 +72491,10 @@ func _finish_serve_deferred(station_index: int, customer: Node3D, review: Dictio
 			_customer_burger_arrived(customer)
 			break
 		await get_tree().process_frame
+	if is_instance_valid(customer) and bool(customer.get_meta("grisaldi_photo_pending",false)):
+		if mp_enabled and NetManager.is_online():mp_grisaldi_photos.rpc(_customer_net_id(customer))
+		await _grisaldi_take_photos(customer)
+		if is_instance_valid(customer):customer.set_meta("grisaldi_photo_pending",false)
 	if customer != null and is_instance_valid(customer) and customer.has_method("release_serve_completion"):
 		var release_began := _perf_hot_begin()
 		customer.release_serve_completion()
@@ -81495,10 +81508,13 @@ func _style_grisaldi(walker: Node3D, special: bool) -> void:
 	var shoes := StandardMaterial3D.new();shoes.albedo_color=Color("E52D35")
 	for mesh in walker.find_children("*","MeshInstance3D",true,false):
 		var label := str(mesh.name).to_lower()
-		# The Blender-authored shirt carries its red/black check materials.
-		if "top" in label or "shirt" in label:
-			var checks:=ShaderMaterial.new();checks.shader=preload("res://shaders/grisaldi_checker.gdshader");mesh.material_override=checks
+		if "top" in label or "shirt" in label:mesh.material_override=null
+		if "bottom" in label:
+			var checks:=ShaderMaterial.new();checks.shader=preload("res://shaders/grisaldi_checker.gdshader")
+			checks.set_shader_parameter("check_red",Color("285239"));checks.set_shader_parameter("check_black",Color("101b16"));mesh.material_override=checks
 		if "shoe" in label: mesh.material_override=shoes
+	if not walker._anim_player.has_animation("burger/Grisaldi_Strut"):
+		walker._burger_props=preload("res://scripts/burger_animation_library.gd").attach(walker._anim_player,walker._anim_player.get_parent())
 
 func _reveal_grisaldi(walker: Node3D) -> void:
 	if bool(walker.get_meta("grisaldi_claimed",false)) or bool(walker.get_meta("grisaldi_rewarded",false)):return
@@ -81512,16 +81528,11 @@ func _reveal_grisaldi(walker: Node3D) -> void:
 	walker._anim_player.speed_scale=1.0
 	if game_audio: game_audio.play_customer_wawa_click(.22,"male",0.0,.7)
 	walker.animate_wawa(1.5,.7)
-	await get_tree().create_timer(2.2).timeout
+	await get_tree().create_timer(2.8).timeout
 	if not is_instance_valid(walker):return
 	walker._anim_player.stop();walker._anim_player.clear_caches()
 	walker._anim_player.play("burger/Burger_Celebration",0.0)
-	for burst in 4:
-		if not mp_enabled or NetManager.is_host(): _earn_money(50)
-		_fly_sale_bills_to_hud(walker,8)
-		if game_audio:game_audio.play_chaching()
-		await get_tree().create_timer(.35).timeout
-	await get_tree().create_timer(.7).timeout
+	await get_tree().create_timer(1.4).timeout
 	if not is_instance_valid(walker):return
 	walker.set_meta("grisaldi_claimed",false)
 	var idx := bg_people.find(walker)
@@ -81615,3 +81626,55 @@ func mp_request_ingredient_extra_hit(idx: int) -> void:
 	if not NetManager.is_host() or not NetManager.connected_peer_ids().has(multiplayer.get_remote_sender_id()):return
 	if idx< -1 or idx>=bg_people.size():return
 	mp_ingredient_extra_hit.rpc(idx)
+
+func _is_grisaldi_guest(customer: Node3D) -> bool:
+	return is_instance_valid(customer) and (bool(customer.get_meta("grisaldi",false)) or bool(customer.get_custom_character_preset().get("grisaldi",false)))
+
+func _grisaldi_reward(customer: Node3D, stars: float) -> void:
+	if not _is_grisaldi_guest(customer) or not bool(customer.get_meta("grisaldi_meal_review_ready",false)) or stars<4.0 or bool(customer.get_meta("grisaldi_tip_paid",false)):return
+	if mp_enabled and not NetManager.is_host():return
+	customer.set_meta("grisaldi_tip_paid",true)
+	_earn_money(500)
+	shift_tips+=500
+	_achievement_event("tips",500.0)
+	_achievement_event("earnings",500.0)
+	for row in order_history:
+		if int(row.number)==int(customer.get_meta("sales_number",-1)):
+			row.tip=int(row.tip)+500;row.profit=float(row.profit)+500
+	_grisaldi_bonus_pending+=8
+	spawn_timer=minf(spawn_timer,2.0)
+	if mp_enabled and NetManager.is_online():mp_grisaldi_boost.rpc()
+	else:mp_grisaldi_boost()
+
+@rpc("authority","call_local","reliable")
+func mp_grisaldi_boost() -> void:
+	_flash("Grisaldi boosted our socials!  +$500 tip • 8 new customers",Color("FFD65A"),5.0)
+	if game_audio:game_audio.play_chaching()
+
+@rpc("authority","call_remote","reliable")
+func mp_grisaldi_photos(nid: int) -> void:
+	var customer=_customer_by_net_id(nid)
+	if is_instance_valid(customer):await _grisaldi_take_photos(customer)
+
+func _grisaldi_take_photos(customer: Node3D) -> void:
+	if not is_instance_valid(customer):return
+	var processing:=customer.is_processing()
+	customer.set_process(false)
+	customer._anim_player.stop();customer._anim_player.clear_caches()
+	customer._play_burger_clip("Phone_Two_Hands")
+	for shot in 3:
+		await get_tree().create_timer(.7).timeout
+		if not is_instance_valid(customer):return
+		var flash:=OmniLight3D.new();flash.omni_range=1.5;flash.light_energy=2.0
+		customer.add_child(flash);flash.position=Vector3(0,1.5,.35)
+		var snap:=AudioStreamPlayer.new();snap.stream=preload("res://sounds/grisaldi_camera.wav");snap.bus="SFX";snap.volume_db=-15;add_child(snap);snap.finished.connect(snap.queue_free);snap.play()
+		get_tree().create_timer(.075).timeout.connect(flash.queue_free)
+	if not is_instance_valid(customer):return
+	customer._anim_player.stop();customer._anim_player.clear_caches()
+	customer._anim_state="";customer._play_anim("idle");customer.set_process(processing)
+
+func _spawn_scheduled_customer() -> void:
+	var before_count := customers.size()
+	_spawn_customer()
+	if _grisaldi_bonus_pending>0 and customers.size()>before_count:_grisaldi_bonus_pending-=1
+	spawn_timer=2.0 if _grisaldi_bonus_pending>0 else _next_spawn_delay()

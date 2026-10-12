@@ -12,9 +12,14 @@ func run():
  var env=WorldEnvironment.new();env.environment=Environment.new();env.environment.background_mode=Environment.BG_COLOR;env.environment.background_color=Color(.3,.4,.42);env.environment.ambient_light_source=Environment.AMBIENT_SOURCE_COLOR;env.environment.ambient_light_color=Color.WHITE;env.environment.ambient_light_energy=.6;game.add_child(env)
  await process_frame;await RenderingServer.frame_post_draw
  get_root().get_texture().get_image().save_png("res://output/grisaldi_new_look.png")
- actor._burger_props=preload("res://scripts/burger_animation_library.gd").attach(actor._anim_player,actor._anim_player.get_parent())
+ if not actor._anim_player.has_animation("burger/Grisaldi_Cartwheel"):actor._burger_props=preload("res://scripts/burger_animation_library.gd").attach(actor._anim_player,actor._anim_player.get_parent())
  assert(actor._anim_player.has_animation("burger/Grisaldi_Cartwheel"))
  actor._anim_player.play("burger/Grisaldi_Cartwheel");actor._anim_player.seek(1.02,true)
  await process_frame;await RenderingServer.frame_post_draw
  get_root().get_texture().get_image().save_png("res://output/grisaldi_cartwheel.png")
+ game._grisaldi_take_photos(actor)
+ await create_timer(1.2).timeout
+ await RenderingServer.frame_post_draw
+ get_root().get_texture().get_image().save_png("res://output/grisaldi_phone.png")
+ await create_timer(1.2).timeout
  print("GRISALDI_VISUAL_OK");quit()
