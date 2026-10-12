@@ -70246,7 +70246,9 @@ func _refresh_station(index: int) -> void:
 		tr.modulate = Color.WHITE
 		if item == "bun_top": tr.modulate = Color.WHITE
 		if item == "onion" and bool(st.get("cooked_onion", false)): tr.modulate = Color(1.0,.88,.62,.78)
-		tr.material = preload("res://shaders/build_bun_color.tres") if item in ["bun_bottom", "bun_top"] else null
+		# Preserve the cheese animation material installed above. Pooled layers are already reset.
+		if item in ["bun_bottom", "bun_top"]:
+			tr.material = preload("res://shaders/build_bun_color.tres")
 		if _is_condiment(item) and st.get("sauce_reveal",{}).has(item):
 			var reveal: Dictionary = st.sauce_reveal[item]
 			var sauce_mat: ShaderMaterial = reveal.get("material")
