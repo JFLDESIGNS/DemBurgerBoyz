@@ -5,7 +5,7 @@ signal departure_finished
 signal warmup_finished
 
 const TRUCK_SCENE = preload("res://assets/menu_truck/burger_pals_truck.glb")
-const DEPARTURE_SECONDS := 1.25
+const DEPARTURE_SECONDS := 1.60
 const MENU_FRAME_PADDING := Vector2(96.0, 64.0)
 const MENU_CAMERA_HEIGHT := 8.3
 var loading_mode := false
@@ -256,17 +256,17 @@ func _process(delta: float) -> void:
 
 func sample_departure(progress: float) -> void:
 	var u := clampf(progress,0.0,1.0)
-	var turn := clampf((u-.18)/.82,0.0,1.0)
+	var turn := clampf((u-.38)/.62,0.0,1.0)
 	var point: Vector3
 	var tangent := Vector3.RIGHT
-	if u < .18:
-		point=Vector3(2.2*pow(u/.18,1.6),0,0)
+	if u < .38:
+		point=Vector3(2.2*pow(u/.38,1.45),0,0)
 	else:
-		var t:=pow(turn,1.15)*.56
+		var t:=turn
 		var a:=Vector3(2.2,0,0)
-		var b:=Vector3(4.8,0,1.1)
-		var c:=Vector3(camera.position.x-1.0,0,4.6)
-		var d:=Vector3(camera.position.x,0,camera.position.z-.3)
+		var b:=Vector3(5.0,0,0)
+		var c:=Vector3(4.8,0,2.1)
+		var d:=Vector3(6.3,0,4.4)
 		point=a.bezier_interpolate(b,c,d,t)
 		tangent=3.0*(1-t)*(1-t)*(b-a)+6.0*(1-t)*t*(c-b)+3.0*t*t*(d-c)
 	_departure_distance+=point.distance_to(_departure_last);_departure_last=point
@@ -276,12 +276,12 @@ func sample_departure(progress: float) -> void:
 	burger.position.y=_burger_rest.y+absf(sin(u*14))*.08
 	for wheel in wheels:wheel.rotation.z=-_departure_distance/.86
 	if _departure_rect.has_area():
-		var expansion:=smoothstep(.05,.72,u)
+		var expansion:=smoothstep(.04,.72,turn)
 		position=_departure_rect.position.lerp(Vector2.ZERO,expansion)
 		size=_departure_rect.size.lerp(get_viewport().get_visible_rect().size,expansion)
-	var focus:=Vector3(.25,2.6,0).lerp(point+tangent.normalized()*2.6+Vector3(1.25*smoothstep(.25,.85,turn),1.8,0),smoothstep(.1,.65,turn))
+	var focus:=Vector3(.25,2.6,0).lerp(point+tangent.normalized()*2.6+Vector3(0.4*smoothstep(.45,.95,turn),1.8,0),smoothstep(.25,.90,turn))
 	camera.look_at(focus)
-	departure_darkness.emit(smoothstep(.74,.97,u))
+	departure_darkness.emit(smoothstep(.82,1.0,u))
 
 
 func sample_loading(time: float) -> void:

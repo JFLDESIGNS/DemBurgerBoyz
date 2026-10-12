@@ -10,7 +10,7 @@ func run():
  truck.departure_darkness.connect(func(a):fade.color.a=a)
  await process_frame
  truck.play_departure();truck.set_process(false)
- for u in [0.0,.28,.55,.75,.90,1.0]:
+ for u in [0.0,.25,.38,.55,.75,.90,1.0]:
   truck.sample_departure(u)
   await process_frame;await RenderingServer.frame_post_draw
   root.get_texture().get_image().save_png("res://output/truck_departure_%03d.png" % int(u*100))
