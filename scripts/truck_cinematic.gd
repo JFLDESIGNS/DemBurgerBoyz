@@ -5,7 +5,7 @@ signal departure_finished
 signal warmup_finished
 
 const TRUCK_SCENE = preload("res://assets/menu_truck/burger_pals_truck.glb")
-const DEPARTURE_SECONDS := 1.75
+const DEPARTURE_SECONDS := 1.25
 const MENU_FRAME_PADDING := Vector2(96.0, 64.0)
 const MENU_CAMERA_HEIGHT := 8.3
 var loading_mode := false
@@ -256,16 +256,16 @@ func _process(delta: float) -> void:
 
 func sample_departure(progress: float) -> void:
 	var u := clampf(progress,0.0,1.0)
-	var turn := clampf((u-.28)/.72,0.0,1.0)
+	var turn := clampf((u-.18)/.82,0.0,1.0)
 	var point: Vector3
 	var tangent := Vector3.RIGHT
-	if u < .28:
-		point=Vector3(2.2*pow(u/.28,1.6),0,0)
+	if u < .18:
+		point=Vector3(2.2*pow(u/.18,1.6),0,0)
 	else:
-		var t:=pow(turn,1.4)
+		var t:=pow(turn,1.15)*.56
 		var a:=Vector3(2.2,0,0)
-		var b:=Vector3(6.8,0,0)
-		var c:=Vector3(camera.position.x,0,3.5)
+		var b:=Vector3(4.8,0,1.1)
+		var c:=Vector3(camera.position.x-1.0,0,4.6)
 		var d:=Vector3(camera.position.x,0,camera.position.z-.3)
 		point=a.bezier_interpolate(b,c,d,t)
 		tangent=3.0*(1-t)*(1-t)*(b-a)+6.0*(1-t)*t*(c-b)+3.0*t*t*(d-c)
@@ -279,9 +279,9 @@ func sample_departure(progress: float) -> void:
 		var expansion:=smoothstep(.05,.72,u)
 		position=_departure_rect.position.lerp(Vector2.ZERO,expansion)
 		size=_departure_rect.size.lerp(get_viewport().get_visible_rect().size,expansion)
-	var focus:=Vector3(.25,2.6,0).lerp(point+Vector3(0,2.0,0),smoothstep(.1,.65,turn))
+	var focus:=Vector3(.25,2.6,0).lerp(point+tangent.normalized()*2.6+Vector3(1.25*smoothstep(.25,.85,turn),1.8,0),smoothstep(.1,.65,turn))
 	camera.look_at(focus)
-	departure_darkness.emit(smoothstep(.62,.90,u))
+	departure_darkness.emit(smoothstep(.74,.97,u))
 
 
 func sample_loading(time: float) -> void:
