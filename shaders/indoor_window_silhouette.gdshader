@@ -8,9 +8,10 @@ uniform float drift=0.0;
 uniform bool cat=false;
 uniform float variant=0.0;
 uniform float aspect=1.0;
+uniform float floor_y=1.28;
 void fragment(){
- float size=cat ? .70 : 1.0;
- vec2 p=vec2((UV.x-.5-drift)*aspect/size+.5,(UV.y-.98)/size+1.0);
+ float size=cat ? .84 : 1.20;
+ vec2 p=vec2((UV.x-.5-drift)*aspect/size+.5,(UV.y-floor_y)/size+1.0);
  p.x += sin(phase)*.008;
  float inside=step(0.0,p.x)*step(p.x,1.0)*step(0.0,p.y)*step(p.y,1.0);
  vec2 cell=vec2(variant,cat ? 1.0 : 0.0);

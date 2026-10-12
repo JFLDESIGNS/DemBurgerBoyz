@@ -4,6 +4,7 @@ var windows: Dictionary={}
 var events: Array=[]
 var wait_left:=1.5
 var game: Node
+var recent_cat_windows: Array[String]=[]
 func setup(data: Dictionary) -> void:
  for spec in data.windows:
   var rect: Array=spec.pixel_rect
@@ -17,6 +18,7 @@ func setup(data: Dictionary) -> void:
   var mat:=ShaderMaterial.new()
   mat.shader=preload("res://shaders/indoor_window_silhouette.gdshader")
   mat.set_shader_parameter("silhouette_atlas",preload("res://assets/backgrounds/mill_market_layers/indoor_silhouette_atlas.png"))
+  mat.set_shader_parameter("floor_y",1.32 if float(rect[1])<1600.0 else 1.25)
   mat.set_shader_parameter("aspect",float(rect[2])/float(rect[3]))
   mat.set_shader_parameter("window_mask",load(ASSETS+str(spec.mask)))
   mesh.material_override=mat
@@ -39,10 +41,19 @@ func tick(delta: float,authority: bool,active: bool) -> void:
  if authority:
   wait_left-=delta
   if wait_left<=0.0 and events.size()<3:
+   var is_cat := randf()<.55
    var choices: Array=[]
    for key in windows:
-    if not windows[key].door and not events.any(func(e):return e.key==key): choices.append(key)
-   if not choices.is_empty(): events.append({"key":choices.pick_random(),"age":0.0,"duration":randf_range(5.0,8.0),"variant":randi_range(0,1),"cat":randf()<.35,"move":randf()<.65,"direction":-1.0 if randf()<.5 else 1.0})
+    if not windows[key].door and key != "Motel_Transom" and not events.any(func(e):return e.key==key): choices.append(key)
+   if is_cat:
+    var fresh := choices.filter(func(key):return not recent_cat_windows.has(str(key)))
+    if not fresh.is_empty(): choices=fresh
+   if not choices.is_empty():
+    var chosen: String=choices.pick_random()
+    if is_cat:
+     recent_cat_windows.append(chosen)
+     if recent_cat_windows.size()>3: recent_cat_windows.pop_front()
+    events.append({"key":chosen,"age":0.0,"duration":randf_range(5.0,8.0),"variant":randi_range(0,1),"cat":is_cat,"move":randf()<.65,"direction":-1.0 if randf()<.5 else 1.0})
    wait_left=randf_range(2.5,4.5)
  render_events()
 func render_events() -> void:
@@ -60,4 +71,5 @@ func render_events() -> void:
   entry.material.set_shader_parameter("drift",sin(float(event.age)/float(event.duration)*PI*2.0)*.18*float(event.direction) if event.move else 0.0)
 func reset() -> void:
  events.clear()
+ recent_cat_windows.clear()
  for entry in windows.values(): entry.mesh.visible=false
