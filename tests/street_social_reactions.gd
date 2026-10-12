@@ -16,6 +16,14 @@ func run() -> void:
   game.customers.append(person)
  var first=game.customers[0]
  var second=game.customers[1]
+ first._apply_leave_fade_alpha(.5)
+ assert(first._leave_fade_bound and not first._leave_fade_bindings.is_empty())
+ var original_bindings: Array=first._leave_fade_bindings.duplicate()
+ first._apply_leave_fade_alpha(1.0)
+ assert(not first._leave_fade_bound and first._leave_fade_materials.is_empty())
+ for binding in original_bindings:
+  var restored: Material=binding.mesh.material_override if int(binding.surface)<0 else binding.mesh.get_surface_override_material(int(binding.surface))
+  assert(restored==binding.material,"Opaque materials must return after leaving the doorway")
  assert(social.first_ordering_customer()==first)
  var cat=load("res://scripts/window_cat.gd").new()
  game.world.add_child(cat);cat.set_process(false);cat.visible=true;cat._state="peek"

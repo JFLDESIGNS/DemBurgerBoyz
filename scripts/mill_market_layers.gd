@@ -377,6 +377,7 @@ func _update_canopy_walker_shade() -> void:
   if not _canopy_shades.has(id):
    var shade := ShaderMaterial.new()
    shade.shader = preload("res://shaders/mill_canopy_walker_shade.gdshader")
+   shade.render_priority=1
    var meshes: Array = []
    for mesh in walker.find_children("*", "MeshInstance3D", true, false):
     if mesh.material_overlay != null: continue

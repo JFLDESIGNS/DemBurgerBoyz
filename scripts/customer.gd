@@ -422,6 +422,7 @@ var _ragdoll_bone_phase: Dictionary = {} ## Per-limb wobble seeds for noodle flo
 var _skeleton: Skeleton3D = null
 var _blood_bursts: Array = [] ## GPUParticles3D to free later
 static var _leave_fade_shader_cache: Dictionary = {}
+var _leave_fade_bindings: Array[Dictionary] = []
 var _leave_fade_materials: Array[Material] = []
 var _leave_fade_bound := false
 var _leave_fade_copies: Dictionary = {}
@@ -1665,6 +1666,16 @@ func _update_leave_fade(delta: float) -> void:
 
 func _apply_leave_fade_alpha(alpha: float) -> void:
 	_leave_fade_alpha = clampf(alpha, 0.0, 1.0)
+	# Doorway fading must not leave opaque walkers in the transparent sorting pass.
+	if _leave_fade_alpha >= 1.0 and _leave_fade_bound:
+		for binding in _leave_fade_bindings:
+			if not is_instance_valid(binding.mesh): continue
+			if int(binding.surface)<0: binding.mesh.material_override=binding.material
+			else: binding.mesh.set_surface_override_material(int(binding.surface),binding.material)
+		_leave_fade_bindings.clear()
+		_leave_fade_materials.clear()
+		_leave_fade_copies.clear()
+		_leave_fade_bound=false
 	# Starting a walk at full opacity must not replace materials or compile shaders.
 	if _leave_fade_alpha >= 1.0 and not _leave_fade_bound:
 		return
@@ -1694,12 +1705,14 @@ func _fade_node_materials(node: Node, alpha: float) -> void:
 		if mi.material_override != null:
 			var faded := _material_for_fade(mi.material_override)
 			if faded != null:
+				_leave_fade_bindings.append({"mesh":mi,"surface":-1,"material":mi.material_override})
 				mi.material_override = faded
 				_track_leave_fade_material(faded, alpha)
 		elif mi.mesh != null:
 			for surface in mi.mesh.get_surface_count():
 				var faded := _material_for_fade(mi.get_active_material(surface))
 				if faded != null:
+					_leave_fade_bindings.append({"mesh":mi,"surface":surface,"material":mi.get_surface_override_material(surface)})
 					mi.set_surface_override_material(surface, faded)
 					_track_leave_fade_material(faded, alpha)
 	for child in node.get_children():

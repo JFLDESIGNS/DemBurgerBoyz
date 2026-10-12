@@ -31789,7 +31789,7 @@ func _build_park_bird_house(tree: Node3D) -> void:
 	tree.add_child(park_bird_house)
 	# Preserve meter-sized assets beneath the imported tree's 0.26 scale.
 	# Hang from the outer branch, 1.33 m farther from the original placement; follows tree shake.
-	park_bird_house.global_transform = Transform3D(Basis(Vector3.UP, PI).scaled(Vector3.ONE * 0.8), tree.global_position + Vector3(2.3428, 1.7286, -0.17))
+	park_bird_house.global_transform = Transform3D(Basis(Vector3.UP, PI).scaled(Vector3.ONE * 0.8), tree.global_position + Vector3(2.4698, 1.7286, -0.17))
 	park_bird_house.set_enabled(current_location_id == TruckLocationsScript.DEFAULT_ID)
 
 

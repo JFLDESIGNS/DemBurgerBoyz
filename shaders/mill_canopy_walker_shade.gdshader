@@ -1,5 +1,5 @@
 shader_type spatial;
-render_mode unshaded, blend_mix, depth_draw_never, cull_disabled;
+render_mode unshaded, blend_mix, depth_draw_never, cull_back;
 uniform float upper_body_start = 0.5;
 uniform float upper_body_end = 0.8;
 uniform float shade_amount : hint_range(0.0, 1.0) = 0.0;
