@@ -12,4 +12,9 @@ func run():
  await create_timer(1.0).timeout
  await RenderingServer.frame_post_draw
  root.get_texture().get_image().save_png("res://output/pal_ball_new.png")
+ arena.view["phase"]="playing"
+ arena.view["players"][1]["jump"]=.3
+ arena._render(1.0,Vector2.ZERO)
+ await process_frame;await RenderingServer.frame_post_draw
+ root.get_texture().get_image().save_png("res://output/pal_ball_jump.png")
  arena.finished=true;print("NEW_PREVIEW_OK");quit()

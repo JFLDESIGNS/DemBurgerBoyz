@@ -30,9 +30,9 @@ func _run() -> void:
 		return
 	menu.set_process(true)
 	await menu.play_departure()
-	if not _check(menu.truck.position.x > 20, "Menu departure failed to leave frame"):
+	if not _check(menu.truck.position.distance_to(Vector3(menu.camera.position.x,0,menu.camera.position.z)) < .5, "Menu departure did not approach the camera"):
 		return
-	if not _check(menu.wheels[0].rotation.z < -20, "Departure wheel spin runs backwards"):
+	if not _check(menu.wheels[0].rotation.z < -10, "Departure wheel spin runs backwards"):
 		return
 	menu.hide()
 	if not _check(menu.viewport.render_target_update_mode == SubViewport.UPDATE_DISABLED and not menu.is_processing(), "Hidden menu still renders/processes"):

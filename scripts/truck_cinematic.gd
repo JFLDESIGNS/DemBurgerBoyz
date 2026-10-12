@@ -1,10 +1,11 @@
 extends Control
 ## The same Blender truck stars in the menu and the first-shift loading sequence.
+signal departure_darkness(amount: float)
 signal departure_finished
 signal warmup_finished
 
 const TRUCK_SCENE = preload("res://assets/menu_truck/burger_pals_truck.glb")
-const DEPARTURE_SECONDS := 1.35
+const DEPARTURE_SECONDS := 1.75
 const MENU_FRAME_PADDING := Vector2(96.0, 64.0)
 const MENU_CAMERA_HEIGHT := 8.3
 var loading_mode := false
@@ -23,6 +24,10 @@ var shot_index := -1
 var camera_cuts := 0
 var departing := false
 var departure_elapsed := 0.0
+var _departure_rect := Rect2()
+var _departure_done := false
+var _departure_last := Vector3.ZERO
+var _departure_distance := 0.0
 var _cycle := -1
 var _body_rest := Vector3.ZERO
 var _burger_rest := Vector3.ZERO
@@ -166,6 +171,7 @@ func end_hidden_prewarm() -> void:
 	_sync_visibility()
 
 func _fit_menu_width() -> void:
+	if departing or _departure_done: return
 	# Overscan every edge without shrinking the truck's on-screen presentation.
 	var holder := get_parent() as Control
 	if holder == null:
@@ -180,6 +186,12 @@ func _sync_visibility() -> void:
 	set_process(active and not _warming)
 	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS if active else SubViewport.UPDATE_DISABLED
 	if active and not loading_mode and not departing:
+		_departure_done = false
+		set_as_top_level(false)
+		z_index = 0
+		z_as_relative = true
+		_fit_menu_width()
+		truck.rotation = Vector3.ZERO
 		truck.position = Vector3.ZERO
 		body.rotation = Vector3.ZERO
 		burger.position = _burger_rest
@@ -212,6 +224,16 @@ func play_departure() -> void:
 	cut.tween_interval(maxf(.01, screech.stream.get_length() - .63))
 	cut.tween_property(screech, "volume_db", -60.0, .03)
 	cut.tween_callback(screech.queue_free)
+	_departure_rect = get_global_rect()
+	set_as_top_level(true)
+	set_anchors_preset(Control.PRESET_TOP_LEFT)
+	position = _departure_rect.position
+	size = _departure_rect.size
+	z_as_relative = false
+	z_index = 4095
+	_departure_done = false
+	_departure_last = Vector3.ZERO
+	_departure_distance = 0.0
 	departing = true
 	departure_elapsed = 0.0
 	await departure_finished
@@ -223,20 +245,44 @@ func _process(delta: float) -> void:
 		return
 	if departing:
 		departure_elapsed += delta
-		var t := minf(departure_elapsed, DEPARTURE_SECONDS)
-		# +X is the truck's nose. Blender +Y axle spin becomes Godot -Z.
-		truck.position.x = 1.5 * t + 13.0 * t * t
-		body.rotation.z = 0.085 * sin(minf(t / 0.8, 1.0) * PI)
-		burger.rotation.z = -0.10 * sin(t * 8.0) * exp(-t)
-		burger.position.y = _burger_rest.y + absf(sin(t * 8.0)) * 0.09
-		for wheel in wheels:
-			wheel.rotation.z = -truck.position.x / 0.86
+		sample_departure(departure_elapsed / DEPARTURE_SECONDS)
 		if departure_elapsed >= DEPARTURE_SECONDS:
 			departing = false
+			_departure_done = true
 			departure_finished.emit()
-	else:
+	elif not _departure_done:
 		body.position.y = _body_rest.y + sin(elapsed * 3.2) * 0.015
 		burger.rotation.z = sin(elapsed * 2.0) * 0.012
+
+func sample_departure(progress: float) -> void:
+	var u := clampf(progress,0.0,1.0)
+	var turn := clampf((u-.28)/.72,0.0,1.0)
+	var point: Vector3
+	var tangent := Vector3.RIGHT
+	if u < .28:
+		point=Vector3(2.2*pow(u/.28,1.6),0,0)
+	else:
+		var t:=pow(turn,1.4)
+		var a:=Vector3(2.2,0,0)
+		var b:=Vector3(6.8,0,0)
+		var c:=Vector3(camera.position.x,0,3.5)
+		var d:=Vector3(camera.position.x,0,camera.position.z-.3)
+		point=a.bezier_interpolate(b,c,d,t)
+		tangent=3.0*(1-t)*(1-t)*(b-a)+6.0*(1-t)*t*(c-b)+3.0*t*t*(d-c)
+	_departure_distance+=point.distance_to(_departure_last);_departure_last=point
+	truck.position=point;truck.rotation.y=-atan2(tangent.z,tangent.x)
+	body.rotation.z=.09*sin(turn*PI)
+	burger.rotation.z=-.08*sin(u*14)*sin(u*PI)
+	burger.position.y=_burger_rest.y+absf(sin(u*14))*.08
+	for wheel in wheels:wheel.rotation.z=-_departure_distance/.86
+	if _departure_rect.has_area():
+		var expansion:=smoothstep(.05,.72,u)
+		position=_departure_rect.position.lerp(Vector2.ZERO,expansion)
+		size=_departure_rect.size.lerp(get_viewport().get_visible_rect().size,expansion)
+	var focus:=Vector3(.25,2.6,0).lerp(point+Vector3(0,2.0,0),smoothstep(.1,.65,turn))
+	camera.look_at(focus)
+	departure_darkness.emit(smoothstep(.62,.90,u))
+
 
 func sample_loading(time: float) -> void:
 	var length := animation.get_animation(clip).length

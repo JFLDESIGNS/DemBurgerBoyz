@@ -31,7 +31,13 @@ var touch_origin := Vector2.ZERO
 var touch_direction := Vector2.ZERO
 var touch_down := false
 var visual_enabled := true
+var theme: AudioStreamPlayer
 var bot_think := 0.0
+var last_sound_event := 0
+var countdown_number := -1
+var sound_cache: Dictionary = {}
+var sound_voices: Array[AudioStreamPlayer] = []
+var sound_voice_index := 0
 
 func setup(owner_game: Node, match_id: int, entries: Array, draw_view: bool = true) -> void:
  game=owner_game;generation=match_id;roster=entries.duplicate(true);hosting=not game.mp_enabled or NetManager.is_host();visual_enabled=draw_view
@@ -39,7 +45,9 @@ func setup(owner_game: Node, match_id: int, entries: Array, draw_view: bool = tr
  simulation.setup(roster);view=simulation.snapshot()
  prior_pause=get_tree().paused;net_process_mode=NetManager.process_mode
  NetManager.process_mode=Node.PROCESS_MODE_ALWAYS
- if draw_view:_build_view()
+ if draw_view:
+  _build_view()
+  theme=AudioStreamPlayer.new();theme.stream=preload("res://assets/music/burger_time.mp3").duplicate();theme.stream.loop=true;theme.volume_db=-12.0;add_child(theme);theme.play()
  get_tree().paused=true
  if hosting:
   ready_peers[NetManager.my_id()]=true
@@ -128,14 +136,20 @@ func _label(parent: Control, text: String, size: int, pos: Vector2, area: Vector
 
 func _build_view() -> void:
  layer=CanvasLayer.new();layer.layer=110;add_child(layer)
+ var backdrop:=ColorRect.new();backdrop.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT);backdrop.mouse_filter=Control.MOUSE_FILTER_IGNORE;backdrop.material=ShaderMaterial.new();backdrop.material.shader=preload("res://shaders/rolly_backdrop.gdshader");layer.add_child(backdrop)
  var container:=SubViewportContainer.new();container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT);container.stretch=true;container.mouse_filter=Control.MOUSE_FILTER_STOP;layer.add_child(container)
- viewport=SubViewport.new();viewport.size=Vector2i(1280,720);viewport.own_world_3d=true;viewport.render_target_update_mode=SubViewport.UPDATE_ALWAYS;container.add_child(viewport)
+ viewport=SubViewport.new();viewport.size=Vector2i(1280,720);viewport.own_world_3d=true;viewport.transparent_bg=true;viewport.render_target_update_mode=SubViewport.UPDATE_ALWAYS;container.add_child(viewport)
  var stage:=Node3D.new();viewport.add_child(stage)
  var env:=WorldEnvironment.new();env.environment=Environment.new();env.environment.background_mode=Environment.BG_COLOR;env.environment.background_color=Color("162D49");env.environment.ambient_light_source=Environment.AMBIENT_SOURCE_COLOR;env.environment.ambient_light_color=Color("B9D9EB");env.environment.ambient_light_energy=.3;stage.add_child(env)
- var camera:=Camera3D.new();stage.add_child(camera);camera.position=Vector3(0,8.2,13.8);camera.look_at(Vector3(0,-.65,0));camera.projection=Camera3D.PROJECTION_PERSPECTIVE;camera.fov=40.0;camera.current=true
+ var camera:=Camera3D.new();stage.add_child(camera);camera.position=Vector3(0,5.6,13.8);camera.look_at(Vector3(0,-.65,0));camera.projection=Camera3D.PROJECTION_PERSPECTIVE;camera.fov=36.0;camera.current=true
  var sun:=DirectionalLight3D.new();sun.rotation_degrees=Vector3(-55,-35,0);sun.light_energy=.85;sun.shadow_enabled=true;stage.add_child(sun)
- arena=MeshInstance3D.new();var disk:=CylinderMesh.new();disk.top_radius=SIM.START_RADIUS;disk.bottom_radius=SIM.START_RADIUS;disk.height=1.1;disk.radial_segments=96;arena.mesh=disk;arena.material_override=_material(Color("23666E"));arena.position.y=-.55;stage.add_child(arena)
- rim=MeshInstance3D.new();var torus:=TorusMesh.new();torus.inner_radius=SIM.START_RADIUS-.09;torus.outer_radius=SIM.START_RADIUS+.09;rim.mesh=torus;rim.material_override=_material(Color("FFCC70"),.25);rim.position.y=.025;stage.add_child(rim)
+ arena=MeshInstance3D.new();var platform:=BoxMesh.new();platform.size=Vector3(SIM.START_RADIUS*2,1.1,SIM.START_RADIUS*2);arena.mesh=platform;arena.material_override=_material(Color("23666E"));arena.position.y=-.55;stage.add_child(arena)
+ rim=MeshInstance3D.new();stage.add_child(rim)
+ for i in 4:
+  var edge:=MeshInstance3D.new();var rail:=BoxMesh.new();rail.size=Vector3(SIM.START_RADIUS*2+.12,.12,.14);edge.mesh=rail;edge.material_override=_material(Color("FFCC70"),.2)
+  edge.position=Vector3(0,.02,SIM.START_RADIUS*(1 if i%2==0 else -1)) if i<2 else Vector3(SIM.START_RADIUS*(1 if i%2==0 else -1),.02,0)
+  if i>=2:edge.rotation.y=PI*.5
+  rim.add_child(edge)
  _decorate_arena(stage)
  for i in roster.size():
   var entry:Dictionary=roster[i];var color:Color=COLORS[i%4]
@@ -147,8 +161,10 @@ func _build_view() -> void:
   actor.add_child(pal);pal.set_process(false);pal.set_physics_process(false)
   pal.scale=Vector3.ONE*.85;pal.position=Vector3(0,SIM.BALL_RADIUS,0);pal.play_street_run(.8)
   for label in pal.find_children("*","Label3D",true,false):label.hide()
-  var name_tag:=Label3D.new();name_tag.text=str(entry.name)+( "  YOU" if int(entry.id)==NetManager.my_id() else "");name_tag.font_size=40;name_tag.pixel_size=.007;name_tag.billboard=BaseMaterial3D.BILLBOARD_ENABLED;name_tag.position.y=2.7;name_tag.modulate=color;name_tag.outline_size=9;actor.add_child(name_tag)
-  actors[int(entry.id)]={"root":actor,"ball":ball,"pal":pal,"tag":name_tag}
+  var name_tag:=Label3D.new();name_tag.text=str(entry.name)+( "  YOU" if int(entry.id)==NetManager.my_id() else "");name_tag.font_size=40;name_tag.pixel_size=.007;name_tag.billboard=BaseMaterial3D.BILLBOARD_ENABLED;name_tag.position.y=2.7;name_tag.modulate=color;name_tag.outline_size=9;actor.add_child(name_tag);name_tag.hide()
+  var shock:=MeshInstance3D.new();var ring:=TorusMesh.new();ring.inner_radius=.94;ring.outer_radius=1.0;ring.rings=48;ring.ring_segments=8;shock.mesh=ring
+  var glow:=_material(color.lightened(.3));glow.shading_mode=BaseMaterial3D.SHADING_MODE_UNSHADED;glow.transparency=BaseMaterial3D.TRANSPARENCY_ALPHA;shock.material_override=glow;shock.position.y=-SIM.BALL_RADIUS+.05;shock.hide();actor.add_child(shock)
+  actors[int(entry.id)]={"root":actor,"ball":ball,"pal":pal,"tag":name_tag,"shock":shock}
  var ui:=Control.new();ui.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT);ui.mouse_filter=Control.MOUSE_FILTER_IGNORE;layer.add_child(ui)
  # A fixed design canvas scales with the window without changing arena input.
  var canvas:=Control.new();ui.add_child(canvas)
@@ -160,10 +176,13 @@ func _build_view() -> void:
  status.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART
  legend=_label(canvas,"",20,Vector2(60,595),Vector2(1160,35))
  help=_label(canvas,"WASD / ARROWS / LEFT STICK: ROLL    •    SPACE / A: BUMP BURST",19,Vector2(20,638),Vector2(1240,35))
- _label(canvas,"Bump the other pals off. Last pal standing wins. Your kitchen is paused.",18,Vector2(30,677),Vector2(1220,28))
+ title.hide();timer_label.hide();legend.hide()
+ help.text="WASD to move   •   SPACE to bump"
+ help.position=Vector2(20,662)
 
 func _render(delta: float, axis: Vector2) -> void:
  if view.is_empty():return
+ _play_match_sounds()
  var scale_factor:float=float(view.radius)/SIM.START_RADIUS
  arena.scale=Vector3(scale_factor,1,scale_factor);rim.scale=arena.scale
  var names:Array[String]=[]
@@ -177,15 +196,32 @@ func _render(delta: float, axis: Vector2) -> void:
   var goal:=Vector3(point.x,height,point.y)
   visual.root.position=visual.root.position.lerp(goal,minf(1.0,delta*20.0)) if last_sequence>=0 or hosting else goal
   visual.root.visible=float(p.fall)<1.4
+  var hit:float=sin(clampf(float(p.get("knockback",0.0))/.65,0,1)*PI)
+  visual.ball.scale=Vector3(1.0+hit*.18,1.0-hit*.22,1.0+hit*.18)
   var velocity:Vector2=p.velocity
   if velocity.length()>.08:
    visual.ball.rotate(Vector3(velocity.y,0,-velocity.x).normalized(),velocity.length()*delta/SIM.BALL_RADIUS)
    visual.pal.rotation.y=lerp_angle(visual.pal.rotation.y,atan2(velocity.x,velocity.y),minf(1.0,delta*10.0))
   visual.pal.rotation.z=-velocity.x*.035;visual.pal.rotation.x=velocity.y*.025
-  if is_instance_valid(visual.pal._anim_player):visual.pal._anim_player.speed_scale=clampf(velocity.length()*.3,.05,1.8)
+  var jump:float=p.get("jump",0.0)
+  var leap:=clampf((.6-jump)/.48,0.0,1.0)
+  visual.pal.position.y=SIM.BALL_RADIUS+(sin(leap*PI)*.85 if jump>.12 else 0.0)
+  if is_instance_valid(visual.pal._anim_player):
+   var anim:AnimationPlayer=visual.pal._anim_player
+   if jump>0 and anim.has_animation("burger/Jump"):
+    if anim.current_animation!="burger/Jump":visual.pal._play_burger_clip("Jump")
+    anim.speed_scale=0.0;anim.seek((1.0-jump/.6)*anim.get_animation("burger/Jump").length,true)
+   else:
+    if anim.current_animation=="burger/Jump":visual.pal.play_street_run(.8)
+    anim.speed_scale=clampf(velocity.length()*.3,.05,1.8)
+  var pulse:float=p.get("pulse",0.0)
+  visual.shock.visible=pulse>0
+  if pulse>0:
+   var wave:=1.0-pulse/.28;visual.shock.scale=Vector3.ONE*(.3+wave*1.7);visual.shock.material_override.albedo_color.a=1.0-wave
   names.append(str(entry.name)+( "  OUT" if not p.alive else ""))
  legend.text="     •     ".join(names)
  timer_label.text="%02d SEC" % int(ceil(float(view.left)))
+ status.visible=view.phase!="playing"
  match str(view.phase):
   "waiting":status.text="Everyone ready?";timer_label.text="GET READY"
   "countdown":status.text="ROLL IN  %d" % maxi(1,int(ceil(4.0-float(view.clock))));timer_label.text="GET READY"
@@ -193,7 +229,7 @@ func _render(delta: float, axis: Vector2) -> void:
    var mine:Dictionary=view.players.get(NetManager.my_id(),{})
    if mine.is_empty() or not bool(mine.get("alive",false)):status.text="You're watching — cheer on your pal!"
    else:status.text="WATCH THE EDGE!" if float(view.left)<=20.0 else "BUMP THEM OFF!"
-   if not mine.is_empty():help.text="WASD / ARROWS / LEFT STICK: ROLL    •    "+("SPACE / A: BURST READY" if float(mine.cooldown)<=0 else "BURST RECHARGING %.1fs" % float(mine.cooldown))
+
   "results":
    var winning:Array[String]=[]
    for entry in roster:
@@ -230,17 +266,50 @@ func _think_bots() -> void:
    if distance<nearest:nearest=distance;target=other.position+other.velocity*.12
   var direction:Vector2=(target-me.position).normalized()
   var radial:Vector2=me.position
-  var margin:float=simulation.arena_radius-radial.length()
+  var margin:float=simulation.arena_radius-maxf(absf(radial.x),absf(radial.y))
   if margin<1.15:direction=(direction*.25-radial.normalized()*1.5).normalized()
   else:direction=direction.rotated(sin(simulation.clock*1.6)*.14)
   simulation.input_for(id,direction,nearest<1.75 and margin>1.5 and randf()<.35)
 
 func _decorate_arena(stage: Node3D) -> void:
  # Recessed sides and alternating rim bolts give the floating platform depth.
- var under:=MeshInstance3D.new();var base:=CylinderMesh.new();base.top_radius=4.25;base.bottom_radius=3.75;base.height=.55;base.radial_segments=64;under.mesh=base;under.material_override=_material(Color("172E48"));under.position.y=-1.3;arena.add_child(under)
- under.position.y=-.75
- for i in 16:
-  var bolt:=MeshInstance3D.new();var bead:=SphereMesh.new();bead.radius=.065;bead.height=.13;bolt.mesh=bead;bolt.material_override=_material(Color("FFF1B5"));var a:=TAU*i/16.0;bolt.position=Vector3(cos(a)*4.42,.59,sin(a)*4.42);arena.add_child(bolt)
+ var under:=MeshInstance3D.new();var base:=BoxMesh.new();base.size=Vector3(8.4,.55,8.4);under.mesh=base;under.material_override=_material(Color("172E48"));arena.add_child(under);under.position.y=-.75
+ for side in 4:
+  for i in 5:
+   var bolt:=MeshInstance3D.new();var bead:=SphereMesh.new();bead.radius=.065;bead.height=.13;bolt.mesh=bead;bolt.material_override=_material(Color("FFF1B5"))
+   var along:=lerpf(-4.3,4.3,i/4.0)
+   bolt.position=Vector3(along,.63,4.5*(1 if side%2==0 else -1)) if side<2 else Vector3(4.5*(1 if side%2==0 else -1),.63,along)
+   arena.add_child(bolt)
  var key:=OmniLight3D.new();key.position=Vector3(-4,4,2);key.light_color=Color("8ECDE0");key.light_energy=.7;key.omni_range=14;stage.add_child(key)
- for i in 7:
-  var plinth:=MeshInstance3D.new();var shape:=CylinderMesh.new();shape.top_radius=.6+float(i%3)*.35;shape.bottom_radius=shape.top_radius*.75;shape.height=1.5+float(i%2);shape.radial_segments=6;plinth.mesh=shape;plinth.material_override=_material(Color("233E58"));plinth.position=Vector3(-10+i*3.4,-3.5,-6.0-float(i%2)*2);stage.add_child(plinth)
+
+func _play_match_sounds() -> void:
+ for event in view.get("events",[]):
+  if int(event.id)<=last_sound_event:continue
+  last_sound_event=int(event.id);_arena_sound(str(event.kind),float(event.strength))
+ if view.phase=="countdown":
+  var number:=int(ceil(4.0-float(view.clock)))
+  if number!=countdown_number:countdown_number=number;_arena_sound("ready",.65)
+
+func _arena_sound(kind: String, gain: float) -> void:
+ if sound_voices.is_empty():
+  for i in 6:
+   var player:=AudioStreamPlayer.new();player.bus="SFX";add_child(player);sound_voices.append(player)
+ if not sound_cache.has(kind):
+  var rate:=22050
+  var duration:=.45 if kind in ["win","fall"] else .23
+  var data:=PackedByteArray();data.resize(int(duration*rate)*2)
+  var phase:=0.0
+  for i in data.size()/2:
+   var t:=float(i)/rate;var u:=t/duration
+   var frequency:=lerpf(240.0,70.0,u)
+   if kind=="ready":frequency=620.0
+   elif kind=="win":frequency=440.0*pow(2.0,float(mini(2,int(u*3)))*4.0/12.0)
+   elif kind=="fall":frequency=lerpf(600.0,90.0,u)
+   elif kind=="burst":frequency=lerpf(120.0,330.0,u)
+   phase+=TAU*frequency/rate
+   var envelope:=minf(1.0,t/.008)*pow(1.0-u,2.0)
+   var sample:float=(sin(phase)+sin(phase*2.01)*.22)*envelope*.55
+   data.encode_s16(i*2,int(clampf(sample,-1,1)*32767))
+  var stream:=AudioStreamWAV.new();stream.format=AudioStreamWAV.FORMAT_16_BITS;stream.mix_rate=rate;stream.data=data;sound_cache[kind]=stream
+ var player:AudioStreamPlayer=sound_voices[sound_voice_index];sound_voice_index=(sound_voice_index+1)%sound_voices.size()
+ player.stream=sound_cache[kind];player.volume_db=-12.0+linear_to_db(maxf(.01,gain));player.play()

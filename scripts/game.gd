@@ -4098,17 +4098,27 @@ func _run_comprehensive_gameplay_load() -> void:
 		return
 	_gameplay_load_in_progress = true
 	_set_phone_in_truck(false)
+	var departure_cover: ColorRect
 	if is_instance_valid(_menu_truck) and start_overlay.visible:
-		var blocker := Control.new()
+		var blocker := ColorRect.new()
+		blocker.color = Color(0,0,0,0)
+		departure_cover = blocker
 		blocker.name = "TruckDepartureInputBlocker"
 		blocker.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		blocker.mouse_filter = Control.MOUSE_FILTER_STOP
-		blocker.z_index = 999
+		blocker.z_as_relative = false
+		blocker.z_index = 4096
 		get_node("UI/Root").add_child(blocker)
+		var fade_call := func(amount: float): blocker.color.a = amount
+		_menu_truck.departure_darkness.connect(fade_call)
 		await _menu_truck.call("play_departure")
-		blocker.queue_free()
+		_menu_truck.departure_darkness.disconnect(fade_call)
 		start_overlay.hide()
 	_show_gameplay_loading_screen()
+	if is_instance_valid(departure_cover):
+		var reveal := create_tween()
+		reveal.tween_property(departure_cover, "color:a", 0.0, .3)
+		reveal.tween_callback(departure_cover.queue_free)
 	_loading_screen_began_ms = Time.get_ticks_msec()
 	_loading_movie_count = 0
 	set_meta("loading_movie_durations_ms", [])
