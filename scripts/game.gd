@@ -31550,16 +31550,8 @@ func _update_background_people(delta: float) -> void:
 		var person_z := z
 		if i < bg_people_is_pair.size() and bool(bg_people_is_pair[i]):
 			person_z = z + BG_PEOPLE_PAIR_Z
-		var pass_target := 0.0
-		if i < bg_people_is_run.size() and bool(bg_people_is_run[i]):
-			pass_target = _bg_runner_pass_u(i)
-		var blend := 0.0
-		if i < bg_people_pass_blend.size():
-			blend = float(bg_people_pass_blend[i])
-			blend = move_toward(blend, pass_target, BG_PEOPLE_PASS_BLEND_SPD * delta)
-			bg_people_pass_blend[i] = blend
-		## Smaller Z is toward the truck / camera.
-		person_z -= BG_PEOPLE_PASS_Z * blend
+		walker.set_meta("street_running",bool(bg_people_is_run[i]))
+		walker.set_meta("street_speed",float(bg_people_speed[i])*speed_mul)
 		walker.position.z = person_z
 		if not mp_enabled or NetManager.is_host(): walker.global_position=_crowd_steer(walker,crowd_before,walker.global_position,delta)
 		var finished: bool = (

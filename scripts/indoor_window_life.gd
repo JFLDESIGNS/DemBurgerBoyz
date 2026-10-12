@@ -37,7 +37,7 @@ func _render_door_cue(key: String,amount: float) -> void:
  entry.mesh.visible=amount>.001
  entry.material.set_shader_parameter("cat",false)
  entry.material.set_shader_parameter("drift",0.0)
- entry.material.set_shader_parameter("opacity",amount*.62)
+ entry.material.set_shader_parameter("opacity",amount*.52)
 func tick(delta: float,authority: bool,active: bool) -> void:
  if not active: return
  for event in events:
@@ -69,7 +69,7 @@ func render_events() -> void:
   var entry: Dictionary=windows[event.key]
   var fade:=smoothstep(0.0,1.2,float(event.age))*(1.0-smoothstep(float(event.duration)-1.4,float(event.duration),float(event.age)))
   entry.mesh.visible=fade>.001
-  entry.material.set_shader_parameter("opacity",fade*.62)
+  entry.material.set_shader_parameter("opacity",fade*.52)
   entry.material.set_shader_parameter("cat",bool(event.cat))
   entry.material.set_shader_parameter("variant",float(event.get("variant",0)))
   entry.material.set_shader_parameter("phase",float(event.age)*2.0)

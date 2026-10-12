@@ -1,7 +1,7 @@
 extends Node
 ## Local animation-contact sounds: no audio RPCs or per-frame allocations.
-static var step_stream: AudioStreamWAV
-static var cartoon_stream: AudioStreamWAV
+const STEPS = [preload("res://sounds/footsteps/footstep_concrete_000.ogg"),preload("res://sounds/footsteps/footstep_concrete_001.ogg"),preload("res://sounds/footsteps/footstep_concrete_002.ogg"),preload("res://sounds/footsteps/footstep_concrete_003.ogg"),preload("res://sounds/footsteps/footstep_concrete_004.ogg")]
+var last_step_sample := -1
 const COURIER_RUN = preload("res://sounds/courier/cartoon_running_qubodup.mp3")
 var actor: Node3D
 var audio: AudioStreamPlayer3D
@@ -12,30 +12,10 @@ var step_count := 0
 var point_voice: AudioStreamPlayer3D
 var skid_audio: AudioStreamPlayer3D
 
-static func make_step(cartoon: bool) -> AudioStreamWAV:
- var stream := AudioStreamWAV.new()
- stream.format = AudioStreamWAV.FORMAT_16_BITS
- stream.mix_rate = 16000
- var data := PackedByteArray()
- data.resize(3200)
- var rng := RandomNumberGenerator.new()
- rng.seed = 71
- for i in range(1600):
-  var t := float(i)/16000.0
-  var envelope := exp(-t*42.0)*minf(t*1000.0,1.0)
-  var tone := sin(TAU*(310.0 if cartoon else 180.0)*t-1400.0*t*t)
-  var sample := (tone*.65+rng.randf_range(-.22,.22))*envelope
-  data.encode_s16(i*2, int(clampf(sample,-1,1)*20000))
- stream.data = data
- return stream
-
 func _ready() -> void:
  name = "CharacterFootsteps"
  actor = get_parent() as Node3D
  last_position = actor.global_position
- if step_stream == null:
-  step_stream = make_step(false)
-  cartoon_stream = make_step(true)
  audio = AudioStreamPlayer3D.new()
  audio.bus = "SFX"
  audio.unit_size = 3.0
@@ -75,13 +55,15 @@ func _process(delta: float) -> void:
  stride_distance=fmod(stride_distance,stride)
  cooldown=.16 if running else .24
  step_count+=1
- audio.stream=cartoon_stream if running else step_stream
+ var sample := (last_step_sample+1+randi_range(0,3))%STEPS.size()
+ last_step_sample=sample
+ audio.stream=STEPS[sample]
  # Footsteps are foreground feedback even when the visible sidewalk is far from the camera.
  audio.attenuation_model=AudioStreamPlayer3D.ATTENUATION_DISABLED
  audio.max_distance=0.0
  audio.attenuation_filter_db=0.0
  audio.volume_db=-12.0 if bool(actor.get("is_street_pedestrian")) else -7.0
- audio.pitch_scale=1.1 if step_count%2==0 else .98
+ audio.pitch_scale=randf_range(1.02,1.10) if running else randf_range(.96,1.04)
  audio.play()
 
 func play_skid(duration: float = .75) -> void:

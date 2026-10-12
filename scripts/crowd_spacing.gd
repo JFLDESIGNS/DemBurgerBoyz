@@ -17,6 +17,17 @@ static func steer(actor: Node3D, before: Vector3, desired: Vector3, actors: Arra
   clearance = maxf(_clearance(other),1.15 if street else 0.0)
   var relative: Vector3=other.global_position-before
   if absf(relative.y)>1.2: continue
+  if street and bool(other.get_meta("street_spacing",false)):
+   var own_speed := float(actor.get_meta("street_speed",1.0))
+   var other_speed := float(other.get_meta("street_speed",1.0))
+   var own_runner := bool(actor.get_meta("street_running",false))
+   var other_runner := bool(other.get_meta("street_running",false))
+   # The faster runner owns the detour, including when overtaking another runner.
+   if own_runner and own_speed > other_speed + .05 and relative.x*direction > -1.5 and relative.x*direction < 2.8 and absf(other.global_position.z-base_z)<1.4:
+    target_z=minf(target_z,other.global_position.z-clearance-.18)
+    continue
+   if other_runner and other_speed > own_speed + .05:
+    continue
   if relative.x*direction>=-clearance-.17 and relative.x*direction<clearance+.65 and absf(other.global_position.z-base_z)<clearance:
    if street and bool(other.get_meta("street_spacing",false)) and relative.x*direction > 0.0 and absf(relative.z)<.85:
     # Follow the walker ahead instead of squeezing alongside them.

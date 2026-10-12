@@ -35,7 +35,7 @@ void fragment() {
   silhouette=max(silhouette,cat);
  }
  vec3 reflected_blue = min(glass.rgb * vec3(0.22,0.38,0.52),vec3(0.012,0.06,0.11));
- ALBEDO=mix(glass.rgb,reflected_blue,silhouette*0.72);
- if(reflection_only){ ALBEDO=vec3(.012,.06,.11); ALPHA=glass.r*silhouette*.52; }
+ ALBEDO=mix(glass.rgb,reflected_blue,silhouette*0.58);
+ if(reflection_only){ ALBEDO=vec3(.012,.06,.11); ALPHA=glass.r*silhouette*.43; }
  else ALPHA=glass.a; // Reflections cannot spill onto frames, pavement, or walls.
 }
