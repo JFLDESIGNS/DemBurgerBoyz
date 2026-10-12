@@ -32,6 +32,10 @@ func run() -> void:
  assert(base_screen.distance_to(canopy_screen) < .1, "Canopy must stay aligned when moved ahead of walkers")
  game._sync_mill_market_layers(game.STREET_BG_MILL1_PATH)
  assert(game.street_matte.get_child_count() == 1)
+ if DisplayServer.get_name() != "headless":
+  await process_frame
+  await RenderingServer.frame_post_draw
+  root.get_texture().get_image().save_png("res://output/street_open_game_camera.png")
  game._sync_mill_market_layers(game.STREET_BG_ORIGINAL_PATH)
  await process_frame
  await process_frame

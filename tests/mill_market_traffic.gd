@@ -65,7 +65,7 @@ func run() -> void:
  street._update_canopy_walker_shade()
  assert(street._walker_reflections.get_shader_parameter("person_count") == 1)
  assert(capsule.material_overlay != null)
- assert(capsule.material_overlay.get_shader_parameter("shade_amount") > .28)
+ assert(capsule.material_overlay.get_shader_parameter("shade_amount") > .65)
  assert(capsule.material_overlay.get_shader_parameter("upper_body_start") < capsule.material_overlay.get_shader_parameter("upper_body_end"))
  walker.visible = false
  street._update_walker_reflections()
@@ -82,7 +82,9 @@ func run() -> void:
  var reversed_rect: Vector4 = street._walker_reflections.get_shader_parameter("people")[0]
  assert(first_rect.is_equal_approx(reversed_rect),"Silhouette offset must not flip with facing")
  var market_foot: Vector3 = street._door_foot("market",-.28)
+ var base_scale: Vector3 = walker.scale
  street._begin_trip(0,"market",true,market_foot,Vector3(market_foot.x,game._bg_people_y(),game._bg_people_z()))
+ assert(walker.scale.is_equal_approx(base_scale*.84))
  assert(bool(walker.get_meta("market_shopping_bag",false)))
  street._update_market_bags()
  var shopping_bag := walker.get_node_or_null("MarketShoppingBag")
@@ -92,6 +94,7 @@ func run() -> void:
  assert(street._shop_sound_serial == sound_serial,"The same snapshot must not retrigger sound")
  for i in range(140): street.tick_building_traffic(1.0/60.0)
  assert(not street.is_building_walker(walker),"A full doorway trip finishes within 2.34 seconds")
+ assert(walker.scale.is_equal_approx(base_scale),"Exiting restores normal size")
  street.cancel_building_traffic()
  street._update_market_bags()
  assert(not shopping_bag.visible)

@@ -31442,7 +31442,7 @@ func _mp_send_background_people_snapshot(peer_id: int = 0) -> void:
 		active.append(on)
 		xs.append(float(walker.position.x) if on else 0.0)
 		zs.append(float(walker.position.z) if on else 0.0)
-		poses.append({"y": walker.position.y, "yaw": walker.rotation.y, "trip": bool(walker.get_meta("building_trip", false)), "bag": bool(walker.get_meta("market_shopping_bag",false)), "visible": walker.visible} if on else {})
+		poses.append({"y": walker.position.y, "scale": walker.scale, "yaw": walker.rotation.y, "trip": bool(walker.get_meta("building_trip", false)), "bag": bool(walker.get_meta("market_shopping_bag",false)), "visible": walker.visible} if on else {})
 	var detail := {"poses": poses, "doors": building.traffic_snapshot() if building != null else {}}
 	if peer_id > 0:
 		mp_background_people_snapshot.rpc_id(peer_id, active, xs, zs, detail)
@@ -31470,6 +31470,7 @@ func mp_background_people_snapshot(active: Array, xs: Array, zs: Array, detail: 
 		if not bool(bg_people_active[i]):
 			continue ## Reliable start carries the matching character before poses apply.
 		var pose: Dictionary = poses[i] if i < poses.size() else {}
+		walker.scale = pose.get("scale", Vector3.ONE * _bg_people_scale())
 		walker.set_meta("building_trip", bool(pose.get("trip", false)))
 		walker.set_meta("market_shopping_bag",bool(pose.get("bag",false)))
 		walker.visible = bool(pose.get("visible", true))
@@ -31506,7 +31507,7 @@ func _update_background_people(delta: float) -> void:
 		var walker := bg_people[i] as Node3D
 		if walker == null or not is_instance_valid(walker):
 			continue
-		walker.scale = Vector3.ONE * s
+		if not bool(walker.get_meta("building_trip",false)): walker.scale = Vector3.ONE * s
 		if not bool(bg_people_active[i]):
 			walker._wawa_click_area.collision_layer = 0
 			if mp_enabled and not NetManager.is_host():

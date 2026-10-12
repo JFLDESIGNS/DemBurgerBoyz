@@ -349,3 +349,12 @@ func apply_network_snapshot(data: Dictionary) -> void:
 		if data.sound == "chirp": play_chirp_event(int(data.serial))
 		elif data.sound == "peck": tap_sound.play()
 	received_sound = int(data.serial)
+
+func hold_for_cat() -> void:
+	if state == &"Idle": idle_duration = maxf(idle_duration,state_time+1.0)
+
+func escape_cat() -> void:
+	if enabled and state in [&"Idle",&"Mad_Peck",&"Perch"]: _enter(&"Takeoff")
+
+func cat_house_impact() -> void:
+	swing_velocity += Vector2(0.42,0.72)

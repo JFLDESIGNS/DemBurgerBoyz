@@ -8,7 +8,7 @@ const CAT_COLLISION_LAYER := 128
 const HOME_X := 0.4192 # Grubbah pickup ledge.
 ## Tutorial composition: farther screen-left, opposite the tutorial customer.
 const TUTORIAL_COACH_X := 2.1548
-const HOME_Z := 2.45 # Pop up behind the pickup ledge.
+const HOME_Z := 2.85 # Pop up behind the pickup ledge.
 ## Under the sill when hidden; peek high enough to clear the ledge.
 const HIDDEN_Y := 0.0902
 ## Counter peek lowered a further two inches (0.0508 world meters).
@@ -65,6 +65,10 @@ var _background_wait := 55.0
 var _background_direction := 1.0
 var _background_attacked := false
 var _bird_pounce_home := Vector3.ZERO
+var _bird_target: WeakRef
+var _bird_escape_triggered := false
+var _bird_house_hit := false
+var _bird_contact := Vector3.ZERO
 var _patty_peek_x := NAN
 var _visual: Node3D = null
 var _area: Area3D = null
@@ -309,7 +313,7 @@ func _update_character(delta: float) -> void:
 	for part in _postal_outfit: part.visible = delivering
 	if delivering:
 		_play_cat_clip("03_Box_Delivery")
-	elif _state in ["running", "bag_chase", "rising", "lowering", "background_walk", "bird_pounce", "background_pounce"]:
+	elif _state in ["running", "bag_chase", "rising", "lowering", "background_walk", "bird_approach", "bird_pounce", "bird_retreat", "background_pounce"]:
 		_play_cat_clip("02_Mail_Walk")
 	elif _happy_anim_left > 0.0 or _state == "fed_hold":
 		_play_cat_clip("04_Happy_Hop")
@@ -317,7 +321,9 @@ func _update_character(delta: float) -> void:
 		_play_cat_clip("01_Idle")
 	var target := Vector3.INF
 	var game := get_tree().current_scene
-	if game != null and game.has_method("customer_attention_target"):
+	if _state in ["bird_approach", "bird_pounce", "bird_retreat"] or Time.get_ticks_msec() < int(get_meta("social_look_until",0)):
+		target = get_meta("social_look", Vector3.INF)
+	elif game != null and game.has_method("customer_attention_target"):
 		target = game.customer_attention_target(false)
 	var camera := get_viewport().get_camera_3d()
 	if not target.is_finite() and camera != null:
@@ -578,6 +584,8 @@ func get_mp_sync() -> Dictionary:
 		"treat": _treat_arm,
 		"eat_w": _patty_eat_wide,
 		"bob": _bob,
+		"bird_gaze": get_meta("social_look",Vector3.ZERO),
+		"bird_gaze_active": _state in ["bird_approach","bird_pounce","bird_retreat"] or Time.get_ticks_msec() < int(get_meta("social_look_until",0)),
 		"presentation": {"fed":_visit_fed,"mouth":is_instance_valid(_mouth_burger),"lift":float(get_meta("steal_lean_lift",0.0)),"lean":_visual.rotation.x if is_instance_valid(_visual) else 0.0,"bites":floorf((1.0-clampf(_timer/RUN_SEC,0.0,1.0))*4.5) if _state=="running" else 0.0},
 	}
 
@@ -607,6 +615,8 @@ func apply_mp_sync(d: Dictionary) -> void:
 	_treat_arm = float(d.get("treat", _treat_arm))
 	_patty_eat_wide = float(d.get("eat_w", _patty_eat_wide))
 	_bob = float(d.get("bob", _bob))
+	set_meta("social_look",d.get("bird_gaze",Vector3.ZERO))
+	set_meta("social_look_until",Time.get_ticks_msec()+300 if bool(d.get("bird_gaze_active",false)) else 0)
 	var presentation: Dictionary=d.get("presentation",{})
 	_visit_fed=bool(presentation.get("fed",_visit_fed))
 	set_meta("steal_lean_lift",float(presentation.get("lift",0.0)))
@@ -1292,12 +1302,42 @@ func _update_wildlife(delta: float, game: Node) -> bool:
 			if absf(position.x)>game.BG_PEOPLE_EDGE_X+2.0:
 				_state="hidden";visible=false;_timer=REPEEK_SEC;_background_wait=randf_range(65,105)
 		return true
-	if _state=="bird_pounce":
-		var u:=1.0-clampf(_timer/1.05,0.0,1.0)
-		var reach:=sin(u*PI)
-		position=_bird_pounce_home.lerp(_run_to,reach);position.y+=reach*.42
-		rotation_degrees.y=_yaw_look(_bird_pounce_home,_run_to)
-		if _timer<=0:_state="peek";_timer=2.0;position=_bird_pounce_home
+	if _state in ["bird_approach","bird_pounce","bird_retreat"]:
+		var target = _bird_target.get_ref() if _bird_target != null else null
+		if not is_instance_valid(target) or not target.enabled:
+			_state="peek";_timer=2.0;position=_bird_pounce_home
+			return true
+		set_meta("social_look",target.bird.global_position)
+		set_meta("social_look_until",Time.get_ticks_msec()+500)
+		rotation_degrees.y=_yaw_look(global_position,target.global_position)
+		if _state=="bird_approach":
+			target.hold_for_cat()
+			var u:=clampf(1.0-_timer/0.95,0.0,1.0)
+			position=_bird_pounce_home.lerp(_run_to,smoothstep(0.0,1.0,u))
+			position.y+=absf(sin(u*PI*3.0))*.035
+			if _timer<=0.0:
+				_run_from=position
+				# Store the contact in the cat parent's coordinate system.
+				_bird_contact=get_parent().to_local(target.bird.global_position-(head_global()-global_position))
+				_state="bird_pounce";_timer=.65
+		elif _state=="bird_pounce":
+			var u:=clampf(1.0-_timer/.65,0.0,1.0)
+			position=_run_from.lerp(_bird_contact,u*u)
+			position.y+=sin(u*PI)*.32
+			if u<.82: target.hold_for_cat()
+			elif not _bird_escape_triggered:
+				_bird_escape_triggered=true
+				target.escape_cat()
+			if u>=.98 and not _bird_house_hit:
+				_bird_house_hit=true
+				target.cat_house_impact()
+			if _timer<=0.0:
+				_run_from=position;_state="bird_retreat";_timer=.8
+		else:
+			var u:=clampf(1.0-_timer/.8,0.0,1.0)
+			position=_run_from.lerp(_bird_pounce_home,smoothstep(0.0,1.0,u))
+			position.y+=sin(u*PI)*.18
+			if _timer<=0.0: _state="peek";_timer=2.0;position=_bird_pounce_home
 		return true
 	if _state=="hidden":
 		_background_wait-=delta
@@ -1313,13 +1353,8 @@ func _update_wildlife(delta: float, game: Node) -> bool:
 			set_meta("social_look",birdhouse.bird.global_position);set_meta("social_look_until",Time.get_ticks_msec()+1600)
 			_timer=maxf(_timer,2.0)
 			if randf()<.5:
-				# Give the cook a feeding window, then look before the playful lunge.
-				var token: WeakRef = weakref(birdhouse)
-				create_tween().tween_interval(.75).finished.connect(func():
-					var target=token.get_ref()
-					if _state!="peek" or not is_instance_valid(target) or not target.state in [&"Idle",&"Mad_Peck"]:return
-					_bird_pounce_home=position;_run_to=position+(target.global_position-position).normalized()*.8
-					_state="bird_pounce";_timer=1.05;target._enter(&"Takeoff"))
+				_begin_bird_approach(birdhouse)
+
 	return false
 
 @rpc("authority", "call_local", "reliable")
@@ -1336,3 +1371,15 @@ func window_shadow_size() -> Vector2:
 	if not is_visible_in_tree() or not _state.begins_with("background") or not is_instance_valid(_visual):
 		return Vector2.ZERO
 	return Vector2(1.15 * _visual.scale.x, 1.05 * _visual.scale.y) * scale.y
+
+func _begin_bird_approach(target: Node3D) -> void:
+	_bird_target=weakref(target)
+	_bird_pounce_home=position
+	_bird_escape_triggered=false
+	_bird_house_hit=false
+	var destination: Vector3=get_parent().to_local(target.global_position)
+	_run_to=position.lerp(destination,.55)
+	_run_to.z=maxf(_run_to.z,position.z+.45)
+	_run_to.y=position.y
+	_state="bird_approach";_timer=.95
+	target.hold_for_cat()

@@ -36,5 +36,11 @@ func run() -> void:
  if DisplayServer.get_name() != "headless":
   await RenderingServer.frame_post_draw
   root.get_texture().get_image().save_png("res://output/mill_layers_godot.png")
+  for shot in [["motel",Vector3(4.35,-2.85,6.0),2.4],["old_poodle",Vector3(.5,-2.7,6.0),2.8]]:
+   camera.position=shot[1]
+   camera.size=shot[2]
+   await process_frame
+   await RenderingServer.frame_post_draw
+   root.get_texture().get_image().save_png("res://output/"+shot[0]+"_door_open.png")
  print("MILL_LAYERS_OK")
  quit()
