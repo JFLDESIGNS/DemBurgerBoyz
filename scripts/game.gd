@@ -2209,6 +2209,7 @@ var street_car_whoosh_played: bool = false
 var street_car_horn_this_pass: bool = false
 var street_car_preview: bool = false ## Parked center car while Hidden is open.
 var _street_car_model_cache: Array = []
+var _grisaldi_visits: Dictionary = {}
 var _vehicle_prewarm_done: bool = false
 var _vehicle_prewarm_running: bool = false
 var bg_people: Array = [] ## Customer street walkers
@@ -4473,10 +4474,12 @@ func _prewarm_street_car_gpu() -> void:
 		street_car_exhaust.emitting = true
 		street_car_exhaust.restart()
 	var warm_layers := _stage_loading_geometry(street_car)
+	warm_layers.append_array(_stage_loading_geometry(street_car_exhaust))
 	for i in street_car.models.size():
 		street_car.set_variant(i)
 		street_car.advance_driving(1.0 / 24.0, STREET_CAR_SPEED)
 		await get_tree().process_frame
+		if DisplayServer.get_name() != "headless": await RenderingServer.frame_post_draw
 	if is_instance_valid(street_car_exhaust):
 		street_car_exhaust.emitting = false
 	_restore_loading_geometry(warm_layers)
@@ -31315,9 +31318,8 @@ func _start_background_person(idx: int, as_partner: bool = false) -> void:
 	walker.set_meta("street_pair", 0)
 	walker.set_meta("crowd_home_z", _bg_people_z() + (BG_PEOPLE_PAIR_Z if as_partner else 0.0))
 	var preset: Dictionary = CustomerScript.take_next_saved_character_preset()
-	if not preset.is_empty() and int(get_meta("grisaldi_day", -1)) != day:
+	if not preset.is_empty() and not as_partner and not _grisaldi_visits.has("%s:%d" % [current_location_id,day]):
 		preset["grisaldi"] = true; preset["top_color"] = "ffffffff"; preset["shoe_color"] = "e52d35ff"; preset["top_style"] = 1
-		set_meta("grisaldi_day", day)
 	if preset.is_empty():
 		bg_people_wait[idx] = 4.0
 		return
@@ -31335,6 +31337,7 @@ func _start_background_person(idx: int, as_partner: bool = false) -> void:
 		bg_people_walk_spawns = 0
 	else:
 		bg_people_walk_spawns += 1
+	if bool(preset.get("grisaldi",false)): is_run=false
 	var walk_speed: float = randf_range(BG_PEOPLE_SPEED_MIN, BG_PEOPLE_SPEED_MAX)
 	var walk_mid: float = (BG_PEOPLE_SPEED_MIN + BG_PEOPLE_SPEED_MAX) * 0.5
 	var gait: float = clampf(walk_speed / maxf(walk_mid, 0.01), 0.72, 1.42)
@@ -31367,6 +31370,7 @@ func _start_background_person(idx: int, as_partner: bool = false) -> void:
 	walker._wawa_click_area.collision_layer = CUSTOMER_WAWA_COLLISION_LAYER
 	bg_people_active[idx] = true
 	_style_grisaldi(walker, bool(preset.get("grisaldi",false)))
+	if bool(preset.get("grisaldi",false)): _grisaldi_visits["%s:%d" % [current_location_id,day]]=true
 	if is_run and walker.has_method("play_street_run"):
 		walker.call("play_street_run", 1.04 + randf() * 0.22)
 	elif walker.has_method("play_street_walk"):
@@ -31502,6 +31506,9 @@ func _update_background_people(delta: float) -> void:
 	var z := _bg_people_z()
 	var y := _bg_people_y()
 	var s := _bg_people_scale()
+	if playing and not shift_paused and not options_menu_open and (not mp_enabled or NetManager.is_host()) and not _grisaldi_visits.has("%s:%d" % [current_location_id,day]):
+		for slot in bg_people.size():
+			if not bool(bg_people_active[slot]): bg_people_wait[slot]=minf(float(bg_people_wait[slot]),1.0)
 	var speed_mul := clampf(_gfx_float("bg_people_speed", 1.0), 0.25, 2.5)
 	var gap_mul := clampf(_gfx_float("bg_people_gap", 1.0), 0.2, 3.5)
 	var building := _mill_market_layer()

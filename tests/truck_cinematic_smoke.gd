@@ -24,6 +24,11 @@ func _run() -> void:
 	menu.set_process(false)
 	if not _check(menu.truck != null and menu.wheels.size() == 4, "Missing truck or animated axles"):
 		return
+	if not _check(menu.body.get_node_or_null("PalsPlateLettering")==null,"Old plate lettering still exists"): return
+	if not _check(menu.body.get_node("PalsLicensePlate").mesh is QuadMesh,"New plate must use the generated artwork"): return
+	if DisplayServer.get_name()!="headless":
+		await RenderingServer.frame_post_draw
+		menu.viewport.get_texture().get_image().save_png("res://output/menu_new_plate.png")
 	if not _check(menu.truck.position.is_equal_approx(Vector3.ZERO), "Menu truck was left at animation approach position"):
 		return
 	if not _check(is_equal_approx(menu.truck.scale.z, 1.15), "Truck side-to-side width was lost"):

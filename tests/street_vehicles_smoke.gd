@@ -24,6 +24,7 @@ func _run() -> void:
 		actor.set_variant(i)
 		var model := actor.models[i]
 		var meshes := model.find_children("*", "MeshInstance3D", true, false)
+		for item in meshes: check(item.cast_shadow==GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,"Traffic should use the cheap contact shadow")
 		var wheels: Array[Node3D] = []
 		var wells: Array[Node3D] = []
 		var body: Node3D
@@ -63,6 +64,13 @@ func _run() -> void:
 		actor.advance_driving(0.01, speed)
 		check(absf(before_scaled.angle_to(wheels[0].quaternion) - TAU * 2.0 * 0.02) < 0.025, "Wheel speed ignores model scale")
 		actor.scale = Vector3.ONE
+	var peak_switch_usec:=0
+	for iteration in 100:
+		var began:=Time.get_ticks_usec()
+		actor.set_variant(iteration%7)
+		actor.advance_driving(.016,12.0)
+		peak_switch_usec=maxi(peak_switch_usec,Time.get_ticks_usec()-began)
+	print("TRAFFIC_POOL_SWITCH_PEAK_USEC ",peak_switch_usec)
 	actor.face_direction(-1.0)
 	check((actor.basis * Vector3.RIGHT).x < -0.99, "Vehicle does not face leftward world travel")
 	actor.face_direction(1.0)

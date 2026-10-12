@@ -18,6 +18,7 @@ var model_bounds: Array[AABB] = []
 var variant_index: int = -1
 var _material_colors: Array = []
 var _darken: float = -1.0
+var contact_shadow: MeshInstance3D
 
 func set_pool(packed_scenes: Array, spread_frames: bool = false) -> void:
 	if not models.is_empty():
@@ -35,7 +36,7 @@ func set_pool(packed_scenes: Array, spread_frames: bool = false) -> void:
 			mesh_count += 1
 			if spread_frames and mesh_count % 8 == 0: await get_tree().process_frame
 			var mesh := item as MeshInstance3D
-			mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+			mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 			for surface in mesh.mesh.get_surface_count():
 				var original := mesh.get_active_material(surface) as StandardMaterial3D
 				if original == null:
@@ -56,6 +57,16 @@ func set_pool(packed_scenes: Array, spread_frames: bool = false) -> void:
 		model_bounds.append(_measure(model))
 		if spread_frames: await get_tree().process_frame
 	if not models.is_empty():
+		contact_shadow=MeshInstance3D.new()
+		contact_shadow.name="TrafficContactShadow"
+		var quad:=QuadMesh.new();quad.size=Vector2.ONE
+		contact_shadow.mesh=quad
+		contact_shadow.rotation.x=-PI*.5
+		contact_shadow.position.y=.018
+		contact_shadow.cast_shadow=GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var shade:=ShaderMaterial.new();shade.shader=preload("res://shaders/traffic_contact_shadow.gdshader")
+		contact_shadow.material_override=shade
+		add_child(contact_shadow)
 		set_variant(0)
 
 func _measure(model: Node3D) -> AABB:
@@ -75,6 +86,7 @@ func set_variant(index: int) -> void:
 	for i in models.size():
 		models[i].visible = i == index
 	variant_index = index
+	if is_instance_valid(contact_shadow): contact_shadow.scale=Vector3(model_bounds[index].size.x*.94,model_bounds[index].size.z*.94,1.0)
 	reset_pose()
 
 func reset_pose() -> void:

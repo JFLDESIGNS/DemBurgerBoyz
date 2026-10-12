@@ -478,8 +478,13 @@ func _style_truck_details() -> void:
 	black.albedo_color = Color("080A0D")
 	black.roughness = .95
 	var geometry := body.find_child("BodyLean_Geometry", true, false) as MeshInstance3D
+	var removed_plate := StandardMaterial3D.new()
+	removed_plate.transparency=BaseMaterial3D.TRANSPARENCY_ALPHA
+	removed_plate.albedo_color=Color(0,0,0,0)
 	for surface in geometry.mesh.get_surface_count():
 		var material := geometry.mesh.surface_get_material(surface)
+		if material != null and "Front_License" in material.resource_name:
+			geometry.set_surface_override_material(surface,removed_plate)
 		if material != null and "wheel-well" in material.resource_name:
 			geometry.set_surface_override_material(surface, black)
 	for axle in [-2.75, 2.83]:
@@ -502,21 +507,16 @@ func _style_truck_details() -> void:
 			body.add_child(arch)
 	var plate := MeshInstance3D.new()
 	plate.name = "PalsLicensePlate"
-	var shape := BoxMesh.new()
-	shape.size = Vector3(.075,.48,1.35)
+	var shape := QuadMesh.new()
+	shape.size = Vector2(1.35,.675)
 	plate.mesh = shape
-	plate.material_override = _material(Color("FFF0CB"))
-	plate.position = Vector3(4.59, .12, 0)
+	var paint:=StandardMaterial3D.new()
+	paint.albedo_texture=preload("res://assets/menu_truck/pals_license_plate.png")
+	paint.transparency=BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+	paint.alpha_scissor_threshold=.5
+	paint.roughness=.75
+	paint.cull_mode=BaseMaterial3D.CULL_DISABLED
+	plate.material_override=paint
+	plate.position=Vector3(4.64,.12,0)
+	plate.rotation.y=PI*.5
 	body.add_child(plate)
-	var lettering := Label3D.new()
-	lettering.name = "PalsPlateLettering"
-	lettering.text = "PALS"
-	lettering.font = preload("res://assets/fonts/Nunito-ExtraBold.ttf")
-	lettering.font_size = 100
-	lettering.pixel_size = .0032
-	lettering.modulate = Color("161C22")
-	lettering.outline_size = 0
-	lettering.position = Vector3(4.632,.12,0)
-	lettering.rotation.y = PI*.5
-	lettering.no_depth_test = false
-	body.add_child(lettering)

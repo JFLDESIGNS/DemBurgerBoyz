@@ -8,6 +8,18 @@ var walker_left := 35.0
 var couples: Array = []
 var walkers: Array = []
 const CONVERSATIONS = [
+	["Was that Grisaldi in the checker shirt?", "Red shoes. Definitely him."],
+	["Grisaldi gave my cousin a pile of money.", "I should wave at more strangers."],
+	["Grisaldi was here before my lunch break.", "That man visits every neighborhood."],
+	["The little town statue is missing.", "The pedestal still has its hat."],
+	["They found tiny wheel marks by the statue.", "Someone stole it with a shopping cart?"],
+	["The missing statue had mustard on its shoes.", "Finally, a clue I understand."],
+	["I heard whistling from the empty pedestal.", "Maybe the statue is on vacation."],
+	["The pigeons are checking our receipts.", "Auditors with wings. Makes sense."],
+	["The moon is a giant burger bun.", "Then explain the sesame seeds."],
+	["That ice cream machine can read minds.", "Mine just says sprinkles."],
+	["Traffic cones move when nobody looks.", "Mine followed me to work."],
+	["The cat secretly owns the bank.", "That explains the interest in my lunch."],
 	["That grill smells amazing.","I was trying not to order fries. I failed."],
 	["Is this your usual lunch spot?","It is now. I followed the smell."],
 	["I think the cat runs this place.","Definitely management."],
