@@ -6,7 +6,7 @@ signal warmup_finished
 
 const TRUCK_SCENE = preload("res://assets/menu_truck/burger_pals_truck.glb")
 const DEPARTURE_SECONDS := 1.45
-const MENU_FRAME_PADDING := Vector2(160.0, 64.0)
+const MENU_FRAME_PADDING := Vector2(400.0, 220.0)
 const MENU_CAMERA_HEIGHT := 8.3
 var loading_mode := false
 var viewport: SubViewport
@@ -28,6 +28,7 @@ var menu_cat: Node3D
 var departure_curve: Curve3D
 var departure_elapsed := 0.0
 var _departure_rect := Rect2()
+var _departure_fov := 36.0
 var _departure_done := false
 var _departure_last := Vector3.ZERO
 var _departure_distance := 0.0
@@ -238,6 +239,7 @@ func play_departure() -> void:
 	cut.tween_interval(maxf(.01, screech.stream.get_length() - .63))
 	cut.tween_property(screech, "volume_db", -60.0, .03)
 	cut.tween_callback(screech.queue_free)
+	_departure_fov = camera.fov
 	_departure_rect = get_global_rect()
 	set_as_top_level(true)
 	set_anchors_preset(Control.PRESET_TOP_LEFT)
@@ -295,6 +297,7 @@ func sample_departure(progress: float) -> void:
 		var expansion:=smoothstep(.04,.72,turn)
 		position=_departure_rect.position.lerp(Vector2.ZERO,expansion)
 		size=_departure_rect.size.lerp(get_viewport().get_visible_rect().size,expansion)
+		camera.fov=rad_to_deg(2.0*atan(tan(deg_to_rad(_departure_fov)*.5)*size.y/_departure_rect.size.y))
 	var focus:=Vector3(.25,2.6,0).lerp(point+tangent.normalized()*2.6+Vector3(0.4*smoothstep(.45,.95,turn),1.8,0),smoothstep(.25,.90,turn))
 	camera.look_at(focus)
 	departure_darkness.emit(smoothstep(.82,1.0,u))

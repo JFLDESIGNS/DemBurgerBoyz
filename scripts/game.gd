@@ -1672,8 +1672,8 @@ var fryer_pit_offset := Vector3.ZERO
 var fryer_oil_color := Color(0.92, 0.68, 0.12, 0.92)
 var fryer_bubble_color := Color(1.0, 0.92, 0.28, 0.72)
 var fries_hand_hold_offset_in := Vector3.ZERO
-var fries_ready_spacing_x := 0.14
-var fries_ready_spacing_z := 0.12
+var fries_ready_spacing_x := 0.24
+var fries_ready_spacing_z := 0.22
 var fries_ready_min_sep := FRIES_HOLD_MIN_SEP
 var fries_ready_pack_scale := 1.035 ## Previous 0.90 shelf size +15%.
 ## Soft kitchen dust motes — drift in air and get shoved by tools / cursor.
@@ -2856,7 +2856,7 @@ const FRYER_READY_LOCAL := Vector3(0.46, 0.040, 0.52)
 const FRIES_HOLD_PACK_Y := 0.108
 ## Finished orders temporarily live beside the visible bun towers for debugging.
 ## One foot camera-right of the prior debug/ready position (world camera-right is -X).
-const FRIES_READY_SODA_OFFSET := Vector3(0.2832, -0.0292, -1.2048)
+const FRIES_READY_SODA_OFFSET := Vector3(0.3282, -0.0292, -1.2048)
 ## HOLD pack grid — 4" tighter than prior 0.16 / 0.14.
 ## Camera is window-side (−Z) looking +Z — farther on screen = higher Z (far HOLD edge).
 const FRIES_HOLD_PACK_SPACING_X := 0.0884 ## 0.16 − 4"
@@ -28419,6 +28419,11 @@ func _load_fryer_tuning_settings() -> void:
 		cfg.set_value(FRYER_TUNING_CFG_SECTION, "ready_pack_scale", minf(1.5, old_ready_scale * 1.15))
 		cfg.set_value(FRYER_TUNING_CFG_SECTION, "finished_fries_scale_15_v1", true)
 		cfg.save(GFX_CFG_PATH)
+	if not cfg.has_section_key(FRYER_TUNING_CFG_SECTION, "finished_fries_spacing_v3"):
+		cfg.set_value(FRYER_TUNING_CFG_SECTION,"ready_spacing_x",maxf(.24,float(cfg.get_value(FRYER_TUNING_CFG_SECTION,"ready_spacing_x",.24))))
+		cfg.set_value(FRYER_TUNING_CFG_SECTION,"ready_spacing_z",maxf(.22,float(cfg.get_value(FRYER_TUNING_CFG_SECTION,"ready_spacing_z",.22))))
+		cfg.set_value(FRYER_TUNING_CFG_SECTION,"finished_fries_spacing_v3",true)
+		cfg.save(GFX_CFG_PATH)
 	if not cfg.has_section_key(FRYER_TUNING_CFG_SECTION, "fryer_smaller_30_basket_half_v1"):
 		## Station 30% smaller; basket world size about half of the previous look.
 		var old_station := clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "station_scale", 1.0)), 0.45, 2.5)
@@ -36832,9 +36837,9 @@ func _ready_fries_slot_world(i: int) -> Vector3:
 	var row := int(clampi(i, 0, FRIES_HOLD_MAX_PACKS - 1) / 2)
 	var base := Vector3(soda_station_pos.x, GRILL_SURFACE_Y + FRIES_HOLD_PACK_Y - 0.045, soda_station_pos.z)
 	return base + FRIES_READY_SODA_OFFSET + Vector3(
-		float(col) * fries_ready_spacing_x,
+		float(col) * maxf(fries_ready_spacing_x, .23 * fries_ready_pack_scale),
 		0.0,
-		float(row) * fries_ready_spacing_z
+		float(row) * maxf(fries_ready_spacing_z, .21 * fries_ready_pack_scale)
 	) + _prop_offset("fryer_done")
 
 
