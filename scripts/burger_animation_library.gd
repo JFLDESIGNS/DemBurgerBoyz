@@ -20,6 +20,8 @@ static func fitted_library() -> AnimationLibrary:
 	_fitted_library = LIBRARY.duplicate(false) as AnimationLibrary
 	var pet_library: AnimationLibrary=load("res://assets/characters/Animations/CatPet.res")
 	for clip in pet_library.get_animation_list(): _fitted_library.add_animation(clip,pet_library.get_animation(clip))
+	var hit_library: AnimationLibrary=load("res://assets/characters/Animations/TruckHit.res")
+	for clip in hit_library.get_animation_list(): _fitted_library.add_animation(clip,hit_library.get_animation(clip))
 	var impatient := LIBRARY.get_animation("Impatient_Foot_Tap").duplicate(true) as Animation
 	var idle := LIBRARY.get_animation("Idle_Forward")
 	for track in impatient.get_track_count():

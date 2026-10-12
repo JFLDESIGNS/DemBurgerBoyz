@@ -133,7 +133,7 @@ func _painted_materials(node: Node) -> void:
    paint.emission_enabled = false
    if "Interior_Back" in str(node.name) or "Jamb" in str(node.name):
     paint.albedo_texture = null
-    paint.albedo_color = Color.from_hsv(0.7325,0.4872,0.228) if "Motel" in str(node.name) else Color.from_hsv(0.0764,0.55,0.32)
+    paint.albedo_color = Color.from_hsv(0.7325,0.4872,0.28) if "Motel" in str(node.name) else Color.from_hsv(0.0764,0.55,0.32)
     paint.cull_mode = BaseMaterial3D.CULL_DISABLED
    mesh_node.set_surface_override_material(i, paint)
  for child in node.get_children():
@@ -201,7 +201,7 @@ func _begin_trip(idx: int, door: String, departing: bool, from: Vector3, to: Vec
  walker.set_meta("building_trip", true)
  walker._wawa_click_area.collision_layer = 0
  walker.global_position = from
- walker.rotation.y = atan2(to.x - from.x, to.z - from.z)
+ if departing: walker.rotation.y = atan2(to.x - from.x, to.z - from.z)
  _trip = {"index": idx, "door": door, "departing": departing, "time": 0.0, "from": from, "to": to, "closed": false, "base_scale": walker.scale, "lead": 0.9 if departing and door != "market" else 0.0, "opened": false}
  if departing: walker.scale *= 0.96
  if float(_trip.lead) <= 0.0: _open_trip_door()
@@ -250,17 +250,20 @@ func tick_building_traffic(delta: float) -> void:
   if total < lead: return
   if not bool(_trip.opened): _open_trip_door()
   var elapsed := total-lead
-  var u := clampf((elapsed - 0.5) / 1.15, 0.0, 1.0)
-  var travel := lerpf(u,smoothstep(0.0,1.0,u),0.45)
+  var u := clampf(elapsed / 1.15, 0.0, 1.0)
+  var travel := u
   var start: Vector3 = _trip["from"]
   var finish: Vector3 = _trip["to"]
   var previous := walker.global_position
   if bool(_trip.departing):
-   walker.global_position = start.lerp(finish,travel)
+   var sidewalk_dir := float(_game.bg_people_dir[idx])
+   var bend := finish-Vector3(0,0,.28)
+   var exit := finish+Vector3(sidewalk_dir*.35,0,0)
+   walker.global_position = start.lerp(bend,travel).lerp(bend.lerp(exit,travel),travel)
   else:
    # Align with the doorway on the sidewalk, then walk straight through it.
    var aligned := Vector3(finish.x,start.y,start.z)
-   walker.global_position = start.lerp(aligned,clampf(travel/.22,0.0,1.0)) if travel < .22 else aligned.lerp(finish,(travel-.22)/.78)
+   walker.global_position = start.lerp(aligned,travel).lerp(aligned.lerp(finish,travel),travel)
   var motion := walker.global_position-previous
   if motion.length_squared() > .000001:
    walker.rotation.y = lerp_angle(walker.rotation.y,atan2(motion.x,motion.z),minf(1.0,delta*12.0))
@@ -276,7 +279,7 @@ func tick_building_traffic(delta: float) -> void:
    if not bool(_trip["departing"]):
     walker.visible = false
     walker._wawa_click_area.collision_layer = 0
-  if elapsed >= 2.2:
+  if u >= 1.0:
    walker.scale = _trip["base_scale"]
    _set_door_appearance(walker,1.0,0.0)
    walker.set_meta("building_trip", false)

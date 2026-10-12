@@ -8,7 +8,7 @@ func run():
  assert(g.bg_people_active[0] and g.bg_people[0].get_meta("grisaldi",false))
  var walker=g.bg_people[0]
  var tops=walker.find_children("FittedTop","MeshInstance3D",true,false)
- assert(tops.size()>0 and tops[0].material_override is ShaderMaterial)
+ assert(tops.size()>0 and tops[0].mesh.get_surface_count()==2)
  assert(g._ingredient_extra_targets().has(walker))
  g.mp_ingredient_extra_hit(0)
  assert(walker.get_meta("food_stop_until")>Time.get_ticks_msec())

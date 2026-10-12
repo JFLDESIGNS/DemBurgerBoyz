@@ -8451,15 +8451,15 @@ func _build_3d_world() -> void:
 
 	# Front wall around window
 	const SERVICE_WINDOW_OPENING_RAISE := 0.3048 # One foot higher top opening, in meters.
-	_add_box(world, Vector3(1.15, 2.7, 0.2), Vector3(-2.95, 1.35, 1.35), Color("080808"))
-	_add_box(world, Vector3(1.15, 2.7, 0.2), Vector3(2.95, 1.35, 1.35), Color("080808"))
-	_add_box(world, Vector3(4.8, 0.55 - SERVICE_WINDOW_OPENING_RAISE, 0.2), Vector3(0, 2.45 + SERVICE_WINDOW_OPENING_RAISE * 0.5, 1.35), Color("080808"))
-	_add_box(world, Vector3(4.8, 0.7, 0.2), Vector3(0, 0.55, 1.35), Color("0A0A0A"))
-	_add_box(world, Vector3(4.9, 0.12, 0.18), Vector3(0, 2.12 + SERVICE_WINDOW_OPENING_RAISE, 1.38), Color("121212"))
-	_add_box(world, Vector3(4.9, 0.12, 0.18), Vector3(0, 0.95, 1.38), Color("121212"))
-	_add_box(world, Vector3(0.12, 1.3 + SERVICE_WINDOW_OPENING_RAISE, 0.18), Vector3(-2.4, 1.55 + SERVICE_WINDOW_OPENING_RAISE * 0.5, 1.38), Color("121212"))
-	_add_box(world, Vector3(0.12, 1.3 + SERVICE_WINDOW_OPENING_RAISE, 0.18), Vector3(2.4, 1.55 + SERVICE_WINDOW_OPENING_RAISE * 0.5, 1.38), Color("121212"))
-	_add_box(world, Vector3(4.8, 0.18, 0.65), Vector3(0, 0.88, 1.1), Color("1C1C1C"))
+	_add_box(world, Vector3(0.9, 2.7, 0.2), Vector3(-3.075, 1.35, 1.35), Color("080808"))
+	_add_box(world, Vector3(0.9, 2.7, 0.2), Vector3(3.075, 1.35, 1.35), Color("080808"))
+	_add_box(world, Vector3(5.3, 0.55 - SERVICE_WINDOW_OPENING_RAISE, 0.2), Vector3(0, 2.45 + SERVICE_WINDOW_OPENING_RAISE * 0.5, 1.35), Color("080808"))
+	_add_box(world, Vector3(5.3, 0.7, 0.2), Vector3(0, 0.55, 1.35), Color("0A0A0A"))
+	_add_box(world, Vector3(5.4, 0.12, 0.18), Vector3(0, 2.12 + SERVICE_WINDOW_OPENING_RAISE, 1.38), Color("121212"))
+	_add_box(world, Vector3(5.4, 0.12, 0.18), Vector3(0, 0.95, 1.38), Color("121212"))
+	_add_box(world, Vector3(0.12, 1.3 + SERVICE_WINDOW_OPENING_RAISE, 0.18), Vector3(-2.65, 1.55 + SERVICE_WINDOW_OPENING_RAISE * 0.5, 1.38), Color("121212"))
+	_add_box(world, Vector3(0.12, 1.3 + SERVICE_WINDOW_OPENING_RAISE, 0.18), Vector3(2.65, 1.55 + SERVICE_WINDOW_OPENING_RAISE * 0.5, 1.38), Color("121212"))
+	_add_box(world, Vector3(5.3, 0.18, 0.65), Vector3(0, 0.88, 1.1), Color("1C1C1C"))
 
 	## Full counter — the physical can now sits with the ingredient strip.
 	_add_box(world, Vector3(4.65, 0.95, 1.35), Vector3(0.0, 0.48, 0.08), Color("080808"))
@@ -28736,7 +28736,7 @@ func _add_window_sill_glass() -> void:
 		sill_glass_mesh.queue_free()
 	sill_glass_mesh = null
 	sill_glass_mat = null
-	const FRAME_X := 2.4
+	const FRAME_X := 2.65
 	const FRAME_HALF_W := 0.06
 	var opening_w := (FRAME_X - FRAME_HALF_W) * 2.0 - 0.08
 	var h := sill_glass_height_in * INCH_TO_M
@@ -28769,7 +28769,7 @@ func _apply_window_sill_glass_settings() -> void:
 	if sill_glass_mesh != null and is_instance_valid(sill_glass_mesh):
 		var h := sill_glass_height_in * INCH_TO_M
 		var thick := maxf(0.004, sill_glass_thick_in * INCH_TO_M)
-		const FRAME_X := 2.4
+		const FRAME_X := 2.65
 		const FRAME_HALF_W := 0.06
 		var opening_w := (FRAME_X - FRAME_HALF_W) * 2.0 - 0.08
 		var box := sill_glass_mesh.mesh as BoxMesh
@@ -31319,7 +31319,7 @@ func _start_background_person(idx: int, as_partner: bool = false) -> void:
 	walker.set_meta("crowd_home_z", _bg_people_z() + (BG_PEOPLE_PAIR_Z if as_partner else 0.0))
 	var preset: Dictionary = CustomerScript.take_next_saved_character_preset()
 	if not preset.is_empty() and not as_partner and not _grisaldi_visits.has("%s:%d" % [current_location_id,day]):
-		preset["grisaldi"] = true; preset["top_color"] = "ffffffff"; preset["shoe_color"] = "e52d35ff"; preset["top_style"] = 1
+		preset.merge({"grisaldi":true,"top_color":"ffffffff","shoe_color":"e52d35ff","top_style":16,"top_catalog_version":1,"bottom_style":2,"bottom_catalog_version":1,"bottom_color":"244b32ff","hat_style":4,"hat_color":"ed2736ff","hair_style":0,"hair_color":"37291fff","facial_hair_style":2,"facial_hair_color":"37291fff","customer_voice":"male","glasses_style":0,"jewelry_style":0,"makeup_style":0,"shirt_graphic":0,"shoe_style":3,"hat_scale":1.0,"hat_offset":[0,0,0],"hat_rotation":[0,0,0]},true)
 	if preset.is_empty():
 		bg_people_wait[idx] = 4.0
 		return
@@ -81489,34 +81489,45 @@ func mp_ingredient_extra_hit(idx: int) -> void:
 func _style_grisaldi(walker: Node3D, special: bool) -> void:
 	walker.set_meta("grisaldi",special)
 	walker.set_meta("grisaldi_claimed",false)
+	walker.set_meta("grisaldi_rewarded",false)
 	if not special:return
-	var checker := ShaderMaterial.new();checker.shader=preload("res://shaders/grisaldi_checker.gdshader")
+
 	var shoes := StandardMaterial3D.new();shoes.albedo_color=Color("E52D35")
 	for mesh in walker.find_children("*","MeshInstance3D",true,false):
 		var label := str(mesh.name).to_lower()
-		if "top" in label or "shirt" in label: mesh.material_override=checker
+		# The Blender-authored shirt carries its red/black check materials.
+		if "top" in label or "shirt" in label:
+			var checks:=ShaderMaterial.new();checks.shader=preload("res://shaders/grisaldi_checker.gdshader");mesh.material_override=checks
 		if "shoe" in label: mesh.material_override=shoes
 
 func _reveal_grisaldi(walker: Node3D) -> void:
-	if bool(walker.get_meta("grisaldi_claimed",false)):return
+	if bool(walker.get_meta("grisaldi_claimed",false)) or bool(walker.get_meta("grisaldi_rewarded",false)):return
 	walker.set_meta("grisaldi_claimed",true)
-	walker.play_street_run(1.4)
-	var tween := create_tween()
-	tween.tween_property(walker,"position",Vector3(0,_bg_people_y(),2.8),1.0)
-	await tween.finished
+	walker.set_meta("grisaldi_rewarded",true)
+	walker.rotation_degrees.y=CustomerScript.FACE_TRUCK_YAW
+	if not walker._anim_player.has_animation("burger/Grisaldi_Cartwheel"):
+		walker._burger_props=preload("res://scripts/burger_animation_library.gd").attach(walker._anim_player,walker._anim_player.get_parent())
+	walker._anim_player.stop();walker._anim_player.clear_caches()
+	walker._anim_player.play("burger/Grisaldi_Cartwheel",0.0)
+	walker._anim_player.speed_scale=1.0
+	if game_audio: game_audio.play_customer_wawa_click(.22,"male",0.0,.7)
+	walker.animate_wawa(1.5,.7)
+	await get_tree().create_timer(2.2).timeout
 	if not is_instance_valid(walker):return
-	walker._play_anim("idle");walker.rotation_degrees.y=CustomerScript.FACE_TRUCK_YAW
-	var speech := Label3D.new();speech.text="You have found Grisaldi!";speech.font_size=42;speech.pixel_size=.006;speech.billboard=BaseMaterial3D.BILLBOARD_ENABLED;speech.position.y=2.3;walker.add_child(speech)
-	var voice := AudioStreamPlayer.new();voice.stream=load("res://sounds/grisaldi_found.wav");voice.bus="SFX";voice.volume_db=-8;add_child(voice);voice.finished.connect(voice.queue_free);voice.play()
+	walker._anim_player.stop();walker._anim_player.clear_caches()
+	walker._anim_player.play("burger/Burger_Celebration",0.0)
 	for burst in 4:
 		if not mp_enabled or NetManager.is_host(): _earn_money(50)
 		_fly_sale_bills_to_hud(walker,8)
 		if game_audio:game_audio.play_chaching()
 		await get_tree().create_timer(.35).timeout
-	await get_tree().create_timer(1.5).timeout
-	if is_instance_valid(speech):speech.queue_free()
-	if is_instance_valid(walker):
-		walker.set_meta("grisaldi_claimed",false);walker.set_meta("grisaldi",false);walker.set_meta("street_hail","ignore");walker.play_street_walk()
+	await get_tree().create_timer(.7).timeout
+	if not is_instance_valid(walker):return
+	walker.set_meta("grisaldi_claimed",false)
+	var idx := bg_people.find(walker)
+	walker._anim_player.stop();walker._anim_player.clear_caches()
+	if idx>=0:_start_street_hail_exit(idx)
+
 
 
 @rpc("any_peer","call_remote","reliable")

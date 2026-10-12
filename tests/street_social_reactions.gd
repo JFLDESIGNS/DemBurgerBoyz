@@ -53,9 +53,13 @@ func run() -> void:
  assert(cat._state=="social_rub" and cat._purr_left>0)
  var reaction=load("res://scripts/customer_truck_smack.gd").new()
  game.add_child(reaction);reaction.setup(game,first,old_position);reaction.set_process(false)
- for i in 190:reaction._process(1.0/60.0)
+ for i in 600:
+  if reaction.hit:break
+  reaction._process(1.0/60.0)
  assert(reaction.hit and game.slot_camera_shake_amp>=.075)
- for i in 125:reaction._process(1.0/60.0)
+ for i in 600:
+  if not bool(first.get_meta("truck_smack_busy",true)):break
+  reaction._process(1.0/60.0)
  assert(not bool(first.get_meta("truck_smack_busy",true)))
  assert(first.position.is_equal_approx(old_position))
  print("STREET_SOCIAL_OK: first-only swats, eating guards, pet/rub, truck impact and return")

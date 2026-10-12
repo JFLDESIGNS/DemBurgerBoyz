@@ -1,4 +1,8 @@
 shader_type spatial;
-varying vec3 local_pos;
-void vertex(){local_pos=VERTEX;}
-void fragment(){float c=mod(floor(local_pos.x*16.0)+floor(local_pos.y*16.0),2.0);ALBEDO=mix(vec3(.015),vec3(.95),c);ROUGHNESS=.9;}
+void fragment(){
+ // Fitted garments supply stable rest-position X/Z in UV2 (FBX centimeter scale).
+ vec2 cells=UV2*640.0;
+ float c=mod(floor(cells.x)+floor(cells.y),2.0);
+ ALBEDO=mix(vec3(.018,.023,.019),vec3(.65,.018,.027),c);
+ ROUGHNESS=.86;
+}

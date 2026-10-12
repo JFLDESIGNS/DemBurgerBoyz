@@ -3,7 +3,7 @@ extends RefCounted
 ## No additional Skeleton3D is retained on the character.
 
 const CATALOG_VERSION := 1
-const LABELS := ["None", "Midnight pink lapel", "Sunshine bowling shirt", "Lagoon contrast collar", "Club varsity", "Seafoam ringer T-shirt", "Ochre striped shirt", "Emerald gold cardigan", "Terracotta polo", "Ivory oxford", "Merlot henley", "Athletic tank top", "Orchid cropped halter", "Stone band-collar shirt", "Navy V-neck sweater", "Sage mockneck tee"]
+const LABELS := ["None", "Midnight pink lapel", "Sunshine bowling shirt", "Lagoon contrast collar", "Club varsity", "Seafoam ringer T-shirt", "Ochre striped shirt", "Emerald gold cardigan", "Terracotta polo", "Ivory oxford", "Merlot henley", "Athletic tank top", "Orchid cropped halter", "Stone band-collar shirt", "Navy V-neck sweater", "Sage mockneck tee", "Grisaldi red checks"]
 const SCENES: Array[PackedScene] = [
 	null,
 	preload("res://assets/shirts/glb/01_Midnight_Lapel.glb"),
@@ -21,6 +21,7 @@ const SCENES: Array[PackedScene] = [
 	preload("res://assets/shirts/glb/13_Stone_Band_Collar.glb"),
 	preload("res://assets/shirts/glb/14_Navy_V_Neck.glb"),
 	preload("res://assets/shirts/glb/15_Sage_Mockneck.glb"),
+	preload("res://assets/shirts/glb/16_Grisaldi_Check.glb"),
 ]
 const BOTTOM_CATALOG_VERSION := 1
 const BOTTOM_LABELS := ["None", "Timber cargo trousers", "Emerald belted chinos", "Slate utility trousers", "Azure cuffed joggers", "Coast pocket jeans", "Plum ankle leggings", "Midnight stripe track pants", "Sand cargo shorts", "Lagoon belted bermudas", "Coral running shorts", "Emerald shorts over leggings", "Olive cuffed capris", "Indigo button A-line skirt", "Orchid pleated skirt", "Saffron pocket midi skirt"]
@@ -143,6 +144,9 @@ static func fitted_mesh(style: int, body_mesh: MeshInstance3D, body_root: Node3D
 static func fabric_material(authored: Material, tint: Color) -> ShaderMaterial:
 	var material := ShaderMaterial.new()
 	material.shader = PRINT_SHADER
+	if authored != null and "Grisaldi" in authored.resource_name:
+		material.shader=preload("res://shaders/grisaldi_checker.gdshader")
+		return material
 	var color := Color.WHITE
 	if authored is BaseMaterial3D:
 		color = (authored as BaseMaterial3D).albedo_color

@@ -2348,7 +2348,7 @@ func play_boss_wawa(loud: bool = false) -> void:
 	)
 
 
-func play_customer_wawa_click(impatience: float = 0.5, voice: String = "male", gain_db: float = 0.0) -> void:
+func play_customer_wawa_click(impatience: float = 0.5, voice: String = "male", gain_db: float = 0.0, pitch: float = GROBBLE_PITCH) -> void:
 	if voice == "female":
 		_play_female_customer_wawa(1.5, gain_db)
 		return
@@ -2362,7 +2362,7 @@ func play_customer_wawa_click(impatience: float = 0.5, voice: String = "male", g
 		_cache["wawawa"] = loaded
 	var stream: AudioStream = _cache["wawawa"]
 	var length := stream.get_length()
-	var source_needed := CLICK_WAWA_CLIP_SEC * GROBBLE_PITCH
+	var source_needed := CLICK_WAWA_CLIP_SEC * pitch
 	var max_start := maxf(0.0, length - source_needed)
 	var start_at := randf() * max_start if max_start > 0.0 else 0.0
 	var target_db := _male_customer_wawa_db(impatience) + (gain_db if _sfx("customers") > 0.0 else 0.0)
@@ -2374,7 +2374,7 @@ func play_customer_wawa_click(impatience: float = 0.5, voice: String = "male", g
 	if _customer_click_wawa_tween != null and is_instance_valid(_customer_click_wawa_tween):
 		_customer_click_wawa_tween.kill()
 	_customer_click_wawa.stream = stream
-	_customer_click_wawa.pitch_scale = GROBBLE_PITCH
+	_customer_click_wawa.pitch_scale = pitch
 	_customer_click_wawa.volume_db = target_db - 12.0
 	_customer_click_wawa.stop()
 	_customer_click_wawa.play(start_at)
