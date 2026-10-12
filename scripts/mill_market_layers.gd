@@ -255,24 +255,20 @@ func _update_walker_reflections() -> void:
  var camera := get_viewport().get_camera_3d()
  if camera == null: return
  var people := PackedVector4Array()
- var gait := PackedFloat32Array()
  for i in _game.bg_people.size():
   var walker: Node3D = _game.bg_people[i]
   if not is_instance_valid(walker) or not walker.visible or not bool(_game.bg_people_active[i]): continue
   var height := 1.7 * walker.scale.y
   # Camera-left is fixed: facing or travel direction never flips the reflection.
-  var reflection_origin := walker.global_position - camera.global_basis.x * height * 0.65
+  var reflection_origin := walker.global_position - camera.global_basis.x * height * 0.50
   var feet := _reflection_uv(reflection_origin,camera)
   var head := _reflection_uv(reflection_origin+Vector3.UP*height*1.3,camera)
   var side := _reflection_uv(reflection_origin+camera.global_basis.x*height*0.72,camera)
   people.append(Vector4(feet.x,feet.y,maxf(absf(side.x-feet.x)*1.4,.001),maxf(feet.y-head.y,.001)))
-  gait.append(Time.get_ticks_msec()*0.001*(9.0 if bool(_game.bg_people_is_run[i]) else 5.0)+i)
   if people.size()==8: break
  var count := people.size()
  people.resize(8)
- gait.resize(8)
  _walker_reflections.set_shader_parameter("people",people)
- _walker_reflections.set_shader_parameter("gait",gait)
  _walker_reflections.set_shader_parameter("person_count",count)
  # Separate slot so the cat is never dropped when all eight walker slots are used.
  var cat: Node3D = _game.window_cat
@@ -280,7 +276,7 @@ func _update_walker_reflections() -> void:
  if is_instance_valid(cat) and cat.has_method("window_shadow_size"):
   var size: Vector2 = cat.window_shadow_size()
   if size.x > 0.0 and size.y > 0.0:
-   var origin := cat.global_position - camera.global_basis.x * size.y * 0.65
+   var origin := cat.global_position - camera.global_basis.x * size.y * 0.50
    var feet := _reflection_uv(origin,camera)
    var head := _reflection_uv(origin + Vector3.UP * size.y * 1.3,camera)
    var side := _reflection_uv(origin + camera.global_basis.x * size.x * 0.7,camera)
