@@ -9,10 +9,10 @@ func run():
  await process_frame
  assert(creator.character_name.text=="Grisaldi")
  assert(creator.character.hair_style==18 and creator.character.top_style==16)
- assert(is_equal_approx(creator.character.hair_offset.y,.48))
+ assert(is_equal_approx(creator.character.hair_offset.y,.54))
  assert(creator.saved_customers.get_child(0).text.begins_with("Grisaldi"))
  creator.character.hair_offset.y+=.02
- assert(is_equal_approx(creator.character.hair_offset.y,.50))
+ assert(is_equal_approx(creator.character.hair_offset.y,.56))
  creator.character.hair_offset.y-=.02
  if DisplayServer.get_name()!="headless":
   await RenderingServer.frame_post_draw
