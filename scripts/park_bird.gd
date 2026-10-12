@@ -14,6 +14,13 @@ const LAUNCH := Vector3(0.16, 0.30, 0.30)
 const DISTANT := Vector3(8.0, 3.5, 5.0)
 const APPROACH := Vector3(-7.0, 3.0, 5.0)
 const LANDING := Vector3(-0.25, 0.25, 0.35)
+const PLUMAGE := [
+	[Color(0.16, 0.32, 0.74), Color(0.055, 0.115, 0.32)], # Blue
+	[Color("F3BE46"), Color("A56424")], # Golden
+	[Color("EE786B"), Color("8C3E56")], # Coral
+]
+var color_variant := -1
+var plumage_materials: Array[Dictionary] = []
 var game: Node
 var network_pose: Dictionary = {}
 var sound_serial := 0
@@ -72,6 +79,16 @@ func _ready() -> void:
 	bird.position = PERCH
 	bird.rotation.y = 0.0
 	sway.add_child(bird)
+	for mesh in bird.find_children("*", "MeshInstance3D", true, false):
+		for surface in mesh.mesh.get_surface_count():
+			var original = mesh.get_active_material(surface)
+			if not original is StandardMaterial3D: continue
+			var wing: bool = original.resource_name.begins_with("Wing blue")
+			if not wing and not original.resource_name.begins_with("Bird blue"): continue
+			var material = original.duplicate()
+			mesh.set_surface_override_material(surface, material)
+			plumage_materials.append({"material":material,"wing":wing})
+	_apply_color_variant(0)
 	animator = bird.find_child("AnimationPlayer", true, false) as AnimationPlayer
 	assert(animator != null, "Park bird needs an AnimationPlayer")
 	for clip in CLIPS:
@@ -88,6 +105,13 @@ func _ready() -> void:
 	wing_sound.pitch_scale = 1.7
 	_enter(&"Away")
 	away_duration = _rng.randf_range(27.0, 33.0)
+
+func _apply_color_variant(value: int) -> void:
+	value = clampi(value, 0, PLUMAGE.size() - 1)
+	if color_variant == value: return
+	color_variant = value
+	for entry in plumage_materials:
+		entry.material.albedo_color = PLUMAGE[value][1 if entry.wing else 0]
 
 func _audio_player(label: String, stream: AudioStream, level: float) -> AudioStreamPlayer3D:
 	var player := AudioStreamPlayer3D.new()
@@ -147,6 +171,8 @@ func _enter(next: StringName) -> void:
 		return
 	var clip := next
 	if next == &"Fly_In":
+		if not is_instance_valid(game) or not game.mp_enabled or NetManager.is_host():
+			_apply_color_variant((color_variant + _rng.randi_range(1, 2)) % PLUMAGE.size())
 		clip = &"Fly"
 		bird.position = PERCH + APPROACH
 	if next in [&"Takeoff", &"Fly", &"Fly_In", &"Perch"]:
@@ -289,12 +315,13 @@ func _mesh_hit(target: Node3D, camera: Camera3D, point: Vector2) -> bool:
 	return false
 
 func network_snapshot() -> Dictionary:
-	return {"state":str(state),"time":state_time,"position":bird.position,"yaw":bird.rotation.y,"sway":sway.transform,"visible":bird.visible,"enabled":enabled,"sound":sound_kind,"serial":sound_serial}
+	return {"state":str(state),"time":state_time,"position":bird.position,"yaw":bird.rotation.y,"sway":sway.transform,"visible":bird.visible,"enabled":enabled,"sound":sound_kind,"serial":sound_serial,"variant":color_variant}
 
 func apply_network_snapshot(data: Dictionary) -> void:
 	if bird == null or data.is_empty(): return
 	set_enabled(bool(data.enabled))
 	if state != StringName(data.state): _enter(StringName(data.state))
+	_apply_color_variant(int(data.get("variant",0)))
 	state_time = float(data.time)
 	if animator.is_playing(): animator.seek(state_time*animator.speed_scale,true)
 	bird.visible = bool(data.visible)

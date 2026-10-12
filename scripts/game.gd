@@ -22268,20 +22268,20 @@ func _apply_disguise_cat_click_stage(cust: Node3D, stage: int) -> void:
 	cust.set_meta("disguise_click_stage", stage)
 	if stage == 1:
 		_flash("Busted! Fake mustache — it's the CAT!", Color("FF8A80"))
-		if game_audio and game_audio.has_method("play_cat_meow"):
-			game_audio.play_cat_meow()
+		if game_audio and game_audio.has_method("play_cat_chirp"):
+			game_audio.play_cat_chirp()
 		if cust.has_method("drop_disguise_props"):
 			cust.drop_disguise_props()
 	elif stage == 2:
-		_flash("MEOW MEOW", Color("FFF59D"))
-		if game_audio and game_audio.has_method("play_cat_meow"):
-			game_audio.play_cat_meow()
+		_flash("Chirp!", Color("FFF59D"))
+		if game_audio and game_audio.has_method("play_cat_chirp"):
+			game_audio.play_cat_chirp()
 		if cust.has_method("disguise_meow"):
 			cust.disguise_meow()
 	else:
 		_flash("Mustache cat retreats!", Color("CE93D8"))
-		if game_audio and game_audio.has_method("play_cat_meow"):
-			game_audio.play_cat_meow()
+		if game_audio and game_audio.has_method("play_cat_chirp"):
+			game_audio.play_cat_chirp()
 		if cust.has_method("drop_mustache_and_flee"):
 			cust.drop_mustache_and_flee()
 
@@ -22415,8 +22415,8 @@ func _try_steal_held_patty_at(screen_pos: Vector2) -> bool:
 
 func _on_window_cat_petted() -> void:
 	_achievement_event("cat_pets")
-	if game_audio and game_audio.has_method("play_cat_purr"):
-		game_audio.play_cat_purr()
+	if game_audio and game_audio.has_method("play_cat_chirp"):
+		game_audio.play_cat_chirp()
 	_flash("Purr… feed cheese, bacon, or a patty!", Color("CE93D8"))
 
 
@@ -70006,6 +70006,7 @@ func _refresh_station(index: int) -> void:
 	# The flying burger owns its own pooled visual. New build contents must not
 	# inherit the previous burger's temporary handoff transparency.
 	if st.has("handoff_items") and st["handoff_items"] != st["items"]: st.erase("handoff_items")
+	preview.visible = not st.has("handoff_items")
 	preview.modulate.a = 0.0 if st.has("handoff_items") else 1.0
 	var blob := preview.get_node_or_null("BuildBurgerShadow") as ColorRect
 	if blob != null: blob.hide()
@@ -71518,7 +71519,7 @@ func _play_serve_fly_to_mouth(
 
 	# Transfer the source visual immediately; the next station edit restores it.
 	st["handoff_items"] = st["items"].duplicate()
-	if is_instance_valid(preview): preview.modulate.a = 0.0
+	if is_instance_valid(preview): preview.hide()
 
 	if is_instance_valid(customer):
 		customer.set_meta("burger_in_flight", true)
@@ -71574,7 +71575,7 @@ func _play_serve_fly_to_mouth(
 		if not is_instance_valid(customer):
 			_release_serve_fly_root(fly_root)
 			st.erase("handoff_items")
-			if is_instance_valid(preview): preview.modulate.a = 1.0
+			if is_instance_valid(preview): preview.show(); preview.modulate.a = 1.0
 			_serve_fly_busy = false
 			return
 
@@ -71638,7 +71639,8 @@ func _play_serve_fly_to_mouth(
 			customer.finish_catch_burger()
 		_customer_burger_arrived(customer)
 		if preview != null and is_instance_valid(preview):
-			preview.modulate = Color(1.0, 1.0, 1.0, 1.0)
+			preview.visible = not st.has("handoff_items")
+			preview.modulate = Color.WHITE
 		_release_serve_fly_root(fly_root)
 		_serve_fly_busy = false
 		if _auto_serving:
@@ -79173,7 +79175,8 @@ func mp_sync_station(
 	if visual_changed: _refresh_station(station_index)
 	var preview = st.get("preview")
 	if is_instance_valid(preview) and not (is_instance_valid(_grubbah) and str(_grubbah.state.get("phase","")) == "wrapping"):
-		preview.modulate.a = 1.0
+		preview.visible = not st.has("handoff_items")
+		preview.modulate.a = 0.0 if st.has("handoff_items") else 1.0
 	_refresh_freshness_label(station_index)
 	_mp_applying = false
 	_refresh_ticket_checkmarks()

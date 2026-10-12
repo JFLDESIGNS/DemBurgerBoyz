@@ -1989,6 +1989,11 @@ func play_cat_meow(gain_scale: float = 1.0) -> void:
 	_play_cached("cat_meow_%d" % (randi() % 3), _make_cat_meow, 1.12 + randf() * 0.18, 8.064 * gain_scale, 18.0)
 
 
+func play_cat_chirp() -> void:
+	if cat_sounds_muted: return
+	_play_cached("cat_purr_%d" % (randi() % 3), _make_cat_purr, 1.12 + randf() * 0.08, 0.20)
+
+
 func play_cat_purr() -> void:
 	if cat_sounds_muted: return
 	_play_cached("cat_purr_%d" % (randi() % 3), _make_cat_purr, 0.95 + randf() * 0.12, 0.20)

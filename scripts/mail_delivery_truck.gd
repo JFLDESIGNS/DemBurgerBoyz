@@ -374,7 +374,7 @@ func pet_courier() -> void:
 	if not waiting_for_treat(): return
 	pet_hop_left = 2.15 / 3.0
 	clip("04_Happy_Hop")
-	if game.game_audio != null: game.game_audio.play_cat_purr()
+	if game.game_audio != null: game.game_audio.play_cat_chirp()
 	game._achievement_event("cat_pets")
 	game._flash("Purr... a cheese or bacon tip would be lovely!",Color("FFE082"))
 

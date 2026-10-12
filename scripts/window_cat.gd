@@ -658,7 +658,7 @@ func _process(delta: float) -> void:
 	_purr_left = maxf(0.0, _purr_left - delta)
 	if is_instance_valid(_purr_player):
 		var audio = get_tree().get_first_node_in_group("game_audio")
-		_purr_player.volume_db = audio._sfx_db(-1.0 + linear_to_db(maxf(.001, minf(_purr_left, 1.0))), "world") if is_instance_valid(audio) else -8.0
+		_purr_player.volume_db = audio._sfx_db(-1.0 + linear_to_db(0.7) + linear_to_db(maxf(.001, minf(_purr_left, 1.0))), "world") if is_instance_valid(audio) else -11.1
 		if _purr_left <= 0.0 or not visible: _purr_player.stop()
 	_treat_arm = maxf(0.0, _treat_arm - delta)
 	_pet_squash = maxf(0.0, _pet_squash - delta * 3.2)
@@ -1089,6 +1089,7 @@ func pet(force: bool = false) -> void:
 			visible = true
 			position.y = _shown_y()
 	_burst_hearts()
+	_meow_elapsed = 0.0 # Keep the click chirp clear of an overlapping begging meow.
 	start_purr()
 	petted.emit()
 
@@ -1223,4 +1224,6 @@ func start_purr() -> void:
 		clip.loop_end = roundi(clip.get_length()*clip.mix_rate)
 		_purr_player.stream = clip
 		add_child(_purr_player)
+	var audio = get_tree().get_first_node_in_group("game_audio")
+	_purr_player.volume_db = audio._sfx_db(-1.0 + linear_to_db(0.7), "world") if is_instance_valid(audio) else -11.1
 	if not _purr_player.playing: _purr_player.play()

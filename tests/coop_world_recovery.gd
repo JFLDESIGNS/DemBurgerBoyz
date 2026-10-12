@@ -26,6 +26,17 @@ func run() -> void:
  b.apply_network_snapshot(a.network_snapshot())
  assert(b.state==a.state and b.bird.position.is_equal_approx(a.bird.position))
  assert(b.sway.transform.is_equal_approx(a.sway.transform))
+ assert(not a.plumage_materials.is_empty())
+ for variant in range(3):
+  a._apply_color_variant(variant)
+  b.apply_network_snapshot(a.network_snapshot())
+  assert(b.color_variant == variant)
+  for material in b.plumage_materials:
+   assert(material.material.albedo_color == b.PLUMAGE[variant][1 if material.wing else 0])
+ for visit in range(12):
+  var previous = a.color_variant
+  a._enter(&"Fly_In")
+  assert(a.color_variant != previous)
  # A known consumed cup must not respawn from delayed idle packets.
  g._consumed_cup_ids[2000017]=true
  g.mp_cup_park(2000017,"cola",1.0,.2,0.0)
@@ -33,6 +44,16 @@ func run() -> void:
  # A 2D build pose is normalized to the receiving viewport and restored on release.
  var preview=Control.new();g.get_node("UI/Root").add_child(preview);preview.position=Vector2(100,200)
  g.stations=[{"preview":preview,"items":[],"patties":[]}]
+ net.role=net.Role.CLIENT;g.mp_enabled=true
+ g.stations[0]["items"] = ["bun_bottom"]
+ g.stations[0]["handoff_items"] = ["bun_bottom"]
+ preview.hide()
+ g.mp_sync_station(0,["bun_bottom"],[])
+ assert(not preview.visible, "Station replication must not resurrect the served build burger")
+ g.stations[0].erase("handoff_items")
+ g.mp_sync_station(0,["bun_bottom"],[])
+ assert(preview.visible, "The next build must remain visible")
+ g.mp_enabled=false;net.role=net.Role.NONE
  g.mp_build_pose(0,true,.1,-.1,.12)
  assert(preview.position.distance_to(Vector2(100,200))>10 and preview.z_index==100)
  # Empty test fixture omits full station UI, so verify pose while active.
