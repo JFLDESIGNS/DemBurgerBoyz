@@ -6224,7 +6224,7 @@ func _process_gameplay(delta: float) -> void:
 			for si in STATION_COUNT:
 				_mp_broadcast_station(si)
 		_mp_background_accum += delta
-		if _mp_background_accum >= 0.2:
+		if _mp_background_accum >= 0.1:
 			_mp_background_accum = 0.0
 			_mp_send_background_people_snapshot()
 		_mp_challenge_accum += delta
@@ -31427,6 +31427,7 @@ func mp_background_person_start(idx: int, preset: Dictionary, dir: float, is_run
 		start_x += -dir * BG_PEOPLE_PAIR_GAP
 	walker.remove_meta("mp_walk_target")
 	walker.remove_meta("mp_walk_pose")
+	walker.remove_meta("mp_walk_buffer")
 	walker.position = Vector3(start_x, _bg_people_y(), z)
 	walker.scale = Vector3.ONE * _bg_people_scale()
 	walker.rotation_degrees = Vector3(0.0, CustomerScript.WALK_PLUS_X_YAW if dir > 0.0 else CustomerScript.WALK_MINUS_X_YAW, 0.0)
@@ -31467,7 +31468,7 @@ func _mp_send_background_people_snapshot(peer_id: int = 0) -> void:
 		xs.append(float(walker.position.x) if on else 0.0)
 		zs.append(float(walker.position.z) if on else 0.0)
 		poses.append({"y": walker.position.y, "scale": walker.scale, "door_alpha": float(walker.get_meta("door_alpha",1.0)), "door_dark": float(walker.get_meta("door_dark",0.0)), "yaw": walker.rotation.y, "trip": bool(walker.get_meta("building_trip", false)), "bag": bool(walker.get_meta("market_shopping_bag",false)), "visible": walker.visible} if on else {})
-	var detail := {"poses": poses, "doors": building.traffic_snapshot() if building != null else {}}
+	var detail := {"time": Time.get_ticks_msec(), "poses": poses, "doors": building.traffic_snapshot() if building != null else {}}
 	if peer_id > 0:
 		mp_background_people_snapshot.rpc_id(peer_id, active, xs, zs, detail)
 	else:
@@ -31503,7 +31504,13 @@ func mp_background_people_snapshot(active: Array, xs: Array, zs: Array, detail: 
 		walker._wawa_click_area.collision_layer = 0 if bool(pose.get("trip", false)) or not walker.visible else CUSTOMER_WAWA_COLLISION_LAYER
 		var target := Vector3(float(xs[i]), float(pose.get("y", _bg_people_y())), float(zs[i]))
 		walker.set_meta("mp_walk_target", target)
-		if walker.position.distance_squared_to(target)>25.0: walker.position=target
+		if not walker.has_meta("mp_walk_buffer"):
+			walker.set_meta("mp_walk_buffer",preload("res://scripts/network_motion_buffer.gd").new())
+		var motion = walker.get_meta("mp_walk_buffer")
+		var sample_pose = pose.duplicate()
+		sample_pose["position"] = target
+		motion.push(float(detail.get("time",Time.get_ticks_msec())),float(Time.get_ticks_msec()),sample_pose)
+		if motion.frames.size()==1: walker.position=target
 
 
 func _update_background_people(delta: float) -> void:
@@ -31540,8 +31547,21 @@ func _update_background_people(delta: float) -> void:
 		if mp_enabled and not NetManager.is_host():
 			if bool(bg_people_active[i]) and not bool(walker.get_meta("truck_smack_busy",false)) and walker.has_meta("mp_walk_target"):
 				var pose: Dictionary = walker.get_meta("mp_walk_pose",{})
-				var blend := 1.0-exp(-delta*12.0)
-				walker.position=walker.position.lerp(walker.get_meta("mp_walk_target"),blend)
+				var target: Vector3 = walker.get_meta("mp_walk_target")
+				if walker.has_meta("mp_walk_buffer"):
+					var sample: Dictionary = walker.get_meta("mp_walk_buffer").sample(float(Time.get_ticks_msec()))
+					if not sample.is_empty():
+						var a: Dictionary=sample["from"]
+						var b: Dictionary=sample["to"]
+						var t: float=sample.weight
+						target=a.position.lerp(b.position,t)
+						pose=b.duplicate()
+						pose.yaw=lerp_angle(float(a.get("yaw",0.0)),float(b.get("yaw",0.0)),t)
+						pose.scale=a.get("scale",Vector3.ONE*s).lerp(b.get("scale",Vector3.ONE*s),t)
+						pose.door_alpha=lerpf(float(a.get("door_alpha",1.0)),float(b.get("door_alpha",1.0)),t)
+						pose.door_dark=lerpf(float(a.get("door_dark",0.0)),float(b.get("door_dark",0.0)),t)
+				var blend := 1.0-exp(-delta*24.0)
+				walker.position=walker.position.lerp(target,blend)
 				walker.rotation.y=lerp_angle(walker.rotation.y,float(pose.get("yaw",walker.rotation.y)),blend)
 				walker.scale=walker.scale.lerp(pose.get("scale",Vector3.ONE*s),blend)
 				if building != null: building._set_door_appearance(walker,lerpf(float(walker.get_meta("door_alpha",1.0)),float(pose.get("door_alpha",1.0)),blend),lerpf(float(walker.get_meta("door_dark",0.0)),float(pose.get("door_dark",0.0)),blend))
@@ -70100,8 +70120,9 @@ func _refresh_station(index: int) -> void:
 	# The flying burger owns its own pooled visual. New build contents must not
 	# inherit the previous burger's temporary handoff transparency.
 	if st.has("handoff_items") and st["handoff_items"] != st["items"]: st.erase("handoff_items")
-	preview.visible = not st.has("handoff_items")
-	preview.modulate.a = 0.0 if st.has("handoff_items") else 1.0
+	var mobile_wrapping: bool = index==0 and is_instance_valid(_grubbah) and _grubbah.wrapping_visual()
+	preview.visible = not st.has("handoff_items") and not mobile_wrapping
+	preview.modulate.a = 0.0 if st.has("handoff_items") or mobile_wrapping else 1.0
 	var blob := preview.get_node_or_null("BuildBurgerShadow") as ColorRect
 	if blob != null: blob.hide()
 	var layer_pool: Array = st.get("layer_pool", [])
@@ -79327,7 +79348,7 @@ func mp_sync_station(
 	_sync_station_cheese_items(station_index)
 	if visual_changed: _refresh_station(station_index)
 	var preview = st.get("preview")
-	if is_instance_valid(preview) and not (is_instance_valid(_grubbah) and str(_grubbah.state.get("phase","")) == "wrapping"):
+	if is_instance_valid(preview) and not (is_instance_valid(_grubbah) and _grubbah.wrapping_visual()):
 		preview.visible = not st.has("handoff_items")
 		preview.modulate.a = 0.0 if st.has("handoff_items") else 1.0
 	_refresh_freshness_label(station_index)

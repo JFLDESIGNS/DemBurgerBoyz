@@ -46,6 +46,7 @@ func run():
   mark("settled")
   while walker.get_meta("mp_walk_target").x<-.5:await process_frame
   assert(walker.position.x<-.9,"Snapshot should set a target, not jump the walker")
+  await create_timer(.28).timeout
   g._update_background_people(1.0/60.0)
   assert(walker.position.x>-.9 and walker.position.x<-.5,"Walker must interpolate between packets")
   mark("smooth")

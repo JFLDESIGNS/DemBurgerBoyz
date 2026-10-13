@@ -42,7 +42,9 @@ func run():
  var arena=load("res://scripts/truck_arena.gd").new();arena.set_process(false)
  var state={"phase":"playing","players":{1:{"position":Vector3.ZERO,"angle":3.1,"travel":0.0,"alive":true}},"shots":[{"id":1,"position":Vector3.ZERO}]}
  var next=state.duplicate(true);next.players[1].position=Vector3(2,0,0);next.players[1].angle=-3.1;next.players[1].travel=2.0;next.shots[0].position=Vector3(4,0,0)
- arena.remote_frames=[{"time":1000,"state":state},{"time":1100,"state":next}]
+ arena.remote_motion.delay_ms=100.0
+ arena.remote_motion.push(1000,1000,state)
+ arena.remote_motion.push(1100,1100,next)
  var sampled:Dictionary=arena._sample_remote_view(1150)
  assert(sampled.players[1].position.is_equal_approx(Vector3(1,0,0)))
  assert(absf(float(sampled.players[1].angle))>3.0)

@@ -176,7 +176,7 @@ func step(dt:float)->void:
    winners=alive.filter(func(id):return players[id].hp==best)
   phase="results";clock=0;match_complete=true;emit_event("win",1)
 func snapshot()->Dictionary:
- return {"players":players.duplicate(true),"phase":phase,"clock":clock,"left":maxf(0,150-clock),"sequence":sequence,"winners":winners.duplicate(),"match_complete":match_complete,"events":events.duplicate(true),"shots":shots.duplicate(true),"pickups":pickups.duplicate(true)}
+ return {"motion_time":Time.get_ticks_msec(),"players":players.duplicate(true),"phase":phase,"clock":clock,"left":maxf(0,150-clock),"sequence":sequence,"winners":winners.duplicate(),"match_complete":match_complete,"events":events.duplicate(true),"shots":shots.duplicate(true),"pickups":pickups.duplicate(true)}
 func _build_navigation()->void:
  navigation.clear()
  for x in 29:

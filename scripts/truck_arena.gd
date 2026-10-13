@@ -122,21 +122,19 @@ func _build_view()->void:
  skid=AudioStreamPlayer.new();skid.bus="SFX";skid.volume_db=-80;add_child(skid)
  var squeal:AudioStreamMP3=preload("res://sounds/vehicles/mail_truck_tire_screech.mp3").duplicate()
  squeal.loop=true;squeal.loop_offset=.1;skid.stream=squeal;skid.play()
-var remote_frames: Array = []
+var remote_motion = preload("res://scripts/network_motion_buffer.gd").new()
 func apply_state(data: Dictionary) -> void:
  if hosting or int(data.get("sequence",-1))<=last_sequence:return
  super.apply_state(data)
- remote_frames.append({"time":Time.get_ticks_msec(),"state":data.duplicate(true)})
- while remote_frames.size()>12:remote_frames.pop_front()
+ remote_motion.delay_ms=150.0
+ remote_motion.push(float(data.get("motion_time",float(data.get("clock",0.0))*1000.0)),float(Time.get_ticks_msec()),data)
 
 func _sample_remote_view(now: int) -> Dictionary:
- if remote_frames.is_empty():return view
- var at:=now-100
- while remote_frames.size()>2 and int(remote_frames[1].time)<=at:remote_frames.pop_front()
- if remote_frames.size()<2:return remote_frames[0].state.duplicate(true)
- var first:Dictionary=remote_frames[0]
- var second:Dictionary=remote_frames[1]
- var weight:=clampf(float(at-int(first.time))/maxf(1.0,float(int(second.time)-int(first.time))),0.0,1.0)
+ var buffered:Dictionary=remote_motion.sample(float(now))
+ if buffered.is_empty():return view
+ var first:Dictionary={"state":buffered["from"]}
+ var second:Dictionary={"state":buffered["to"]}
+ var weight:float=buffered.weight
  var result:Dictionary=second.state.duplicate(true)
  if first.state.phase!=second.state.phase:return result
  for id in result.players:

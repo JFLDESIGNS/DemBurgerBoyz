@@ -25,6 +25,8 @@ var next_number = 1
 var wait_time = 95.0
 var age = 0.0
 var remote_age = 0.0
+var packing_visual_age = 0.0
+var packing_visual_order = -1
 var sync_time = 0.0
 var last_day = -1
 var was_playing = false
@@ -429,7 +431,7 @@ func request_snapshot() -> void:
  if host():snapshot.rpc_id(multiplayer.get_remote_sender_id(),snapshot_payload(),revision,age,knife_owner)
 @rpc("authority","call_remote","reliable")
 func snapshot(data: Dictionary, rev: int, elapsed: float, owner: int) -> void:
- if host() or rev<revision:return
+ if host() or rev<=revision:return
  var same_phase=str(state.get("phase",""))==str(data.get("phase","")) and int(state.get("number",-1))==int(data.get("number",-2))
  state=data.duplicate(true);revision=rev;remote_age=elapsed
  if not same_phase: age=elapsed
@@ -546,10 +548,32 @@ func add_bag_label() -> void:
   mat.set_shader_parameter("outline_width",.0025/maxf(.001,rim.global_basis.get_scale().x));mat.set_shader_parameter("glow_strength",.4)
   rim.material_override=mat;rim.cast_shadow=GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
  bag_ticket=Sprite3D.new();bag_ticket.name="AttachedMobileTicket";bag_ticket.texture=ticket_view.get_texture() if is_instance_valid(ticket_view) else game._ticket_paper_texture(false);bag_ticket.pixel_size=.20/float(ticket_view.size.y) if is_instance_valid(ticket_view) else .0005;bag_ticket.position=Vector3(.035,.25,-.135);bag_ticket.rotation=Vector3(0,PI,-.08);bag.add_child(bag_ticket);bag_ticket.hide()
+func wrapping_visual() -> bool:
+ return str(state.get("phase",""))=="wrapping" or last_phase=="wrapping"
+
+func packing_phase(delta: float) -> Dictionary:
+ var requested=str(state.get("phase",""))
+ var number=int(state.get("number",-1))
+ var durations={"wrapping":1.2,"bagging":BURGER_BAG_FLIGHT,"sealed":BAG_PICKUP_FLIGHT}
+ packing_visual_age+=delta
+ var phase=requested
+ # Finish a short flight even when two delayed reliable updates arrive together.
+ if number==packing_visual_order and requested in ["bagging","sealed","pickup","collected"] and durations.has(last_phase) and packing_visual_age<float(durations[last_phase]):
+  phase=last_phase
+ if number==packing_visual_order and phase!=last_phase:
+  var sequence=["wrapping","bagging","sealed","pickup","collected"]
+  var previous=sequence.find(last_phase)
+  if previous>=0 and sequence.find(phase)>previous+1: phase=sequence[previous+1]
+ if phase!=last_phase or number!=packing_visual_order:
+  packing_visual_order=number
+  packing_visual_age=0.0 if durations.has(phase) else age
+ return {"phase":phase,"age":packing_visual_age if durations.has(phase) else age}
+
 func update_visuals(_delta: float) -> void:
  if not is_instance_valid(props):return
  bag_bounce_age += _delta
- var phase=str(state.get("phase",""));var base=board_pos()
+ var presentation=packing_phase(_delta)
+ var phase=str(presentation.phase);var age=float(presentation.age);var base=board_pos()
  if not state.is_empty():
   var desired_driver=int(state.get("number",0))
   if driver_style!=desired_driver:
@@ -598,7 +622,13 @@ func update_visuals(_delta: float) -> void:
  wrap_button.position=center+Vector2(-87,98)
  wrap_button.modulate=Color("FFD06A") if not wrap_button.disabled else Color("B7B0A0")
  var preview=game.stations[0].get("preview")
- if is_instance_valid(preview):preview.modulate.a=0.0 if phase=="wrapping" or game.stations[0].has("handoff_items") else 1.0
+ if is_instance_valid(preview):
+  var covered=phase=="wrapping" or game.stations[0].has("handoff_items")
+  if covered:
+   preview.hide();preview.set_meta("mobile_wrap_hidden",true)
+  elif bool(preview.get_meta("mobile_wrap_hidden",false)):
+   preview.show();preview.remove_meta("mobile_wrap_hidden")
+  preview.modulate.a=0.0 if covered else 1.0
  bag_finish.visible=phase=="bagging" and age>=BURGER_BAG_FLIGHT
  bag_finish.text="PACKING SIDES" if side_visuals.size()>0 else "WAITING FOR SIDES"
  bag_glow.visible=bag_finish.visible
@@ -609,7 +639,7 @@ func update_visuals(_delta: float) -> void:
  if phase=="bagging":
   var t=clampf(age/BURGER_BAG_FLIGHT,0,1)
   wrapped.position=burger_bag_position(t,base+Vector3(0,.06,0),bag_station_pos()+Vector3(0,bag_opening_y,0))
-  wrapped.rotation=Vector3(t*TAU,sin(t*PI)*.65,t*PI*.75)
+  wrapped.rotation=Vector3(sin(t*PI)*.18,sin(t*PI)*.35,sin(t*PI)*.12)
   wrapped.scale=Vector3.ONE*lerpf(1.0,.35,smoothstep(.65,.82,t));wrapped.visible=t<.82
   if t>=.82 and not bag_impact_played:bag_impact_played=true;bag_impact()
  update_side_visuals()
