@@ -18,7 +18,7 @@ func setup(owner_game: Node,person: Node3D,origin: Vector3) -> void:
  actor._eating=false;actor._burger_eat_phase="";actor._cat_pet_left=0.0
  actor.global_position=home
  # The camera faces +Z: negative X is screen right. Route around the queue.
- contact=Vector3(-1.55,actor.STAND_Y,1.20)
+ contact=Vector3(-1.55,actor.STAND_Y,1.20 + 0.6096) # Two feet farther from the truck.
  route.assign([Vector3(-9.2,home.y,home.z),Vector3(-9.2,actor.STAND_Y,actor.WAIT_Z),Vector3(contact.x,actor.STAND_Y,actor.WAIT_Z),contact])
  if not actor._anim_player.has_animation("burger/Truck_Smack"):
   actor._burger_props=preload("res://scripts/burger_animation_library.gd").attach(actor._anim_player,actor._anim_player.get_parent())
@@ -55,7 +55,8 @@ func _process(delta: float) -> void:
    if is_instance_valid(game.game_audio):game.game_audio.play_truck_knock(1.0)
   if age>=1.4:
    phase="escape";route_index=0
-   route.assign([Vector3(contact.x,actor.STAND_Y,20.0)])
+   # Leave along the foreground lane to screen right, never toward storefronts.
+   route.assign([Vector3(-10.5,actor.STAND_Y,contact.z)])
    actor._anim_player.stop();actor._anim_player.clear_caches()
    actor.play_street_run(1.3)
 func finish() -> void:
@@ -63,7 +64,10 @@ func finish() -> void:
   actor.set_meta("truck_smack_busy",false);actor.set_meta("food_stop_until",0)
   actor._reset_skeleton_pose();actor.set_process(home_process);actor.scale=home_scale
   if actor.is_street_pedestrian:
+   actor.set_meta("building_trip",false)
+   actor.remove_meta("mp_walk_target");actor.remove_meta("mp_walk_pose");actor.remove_meta("mp_walk_buffer")
    actor.visible=false
+   actor._wawa_click_area.collision_layer=0
    var idx: int=game.bg_people.find(actor)
    if idx>=0:game.bg_people_active[idx]=false;game.bg_people_wait[idx]=8.0
   else:
