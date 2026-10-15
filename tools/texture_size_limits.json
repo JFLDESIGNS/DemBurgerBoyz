@@ -1,0 +1,242 @@
+[
+  {
+    "path": "assets/fire_ext/NORMAL.jpg.import",
+    "source": "assets/fire_ext/NORMAL.jpg",
+    "limit": 1024,
+    "previous_limit": 0,
+    "previous_pack_mb": 3.949,
+    "reason": "Extinguisher normal detail; label unchanged"
+  },
+  {
+    "path": "assets/fire_ext/REF_COLOR_MAP_(specular).jpg.import",
+    "source": "assets/fire_ext/REF_COLOR_MAP_(specular).jpg",
+    "limit": 512,
+    "previous_limit": 0,
+    "previous_pack_mb": 2.595,
+    "reason": "Extinguisher specular detail; label unchanged"
+  },
+  {
+    "path": "models/burgerpack/try2/SM_FastFoodBagClosed_T_FastFoodBag_N.png.import",
+    "source": "models/burgerpack/try2/SM_FastFoodBagClosed_T_FastFoodBag_N.png",
+    "limit": 1024,
+    "previous_limit": 0,
+    "previous_pack_mb": 2.422,
+    "reason": "Small prop surface normal detail"
+  },
+  {
+    "path": "models/burgerpack/try2/SM_FastFoodBagCrumpled_T_FastFoodBag_N.png.import",
+    "source": "models/burgerpack/try2/SM_FastFoodBagCrumpled_T_FastFoodBag_N.png",
+    "limit": 1024,
+    "previous_limit": 0,
+    "previous_pack_mb": 2.422,
+    "reason": "Small prop surface normal detail"
+  },
+  {
+    "path": "models/burgerpack/try2/SM_FastFoodBagOpen_T_FastFoodBag_N.png.import",
+    "source": "models/burgerpack/try2/SM_FastFoodBagOpen_T_FastFoodBag_N.png",
+    "limit": 1024,
+    "previous_limit": 0,
+    "previous_pack_mb": 2.422,
+    "reason": "Small prop surface normal detail"
+  },
+  {
+    "path": "models/burgerpack/try2/SM_Tree_Large_01_MI_Bark_Tree_Large_01_SM_Tree_Large_01_Normal.png.import",
+    "source": "models/burgerpack/try2/SM_Tree_Large_01_MI_Bark_Tree_Large_01_SM_Tree_Large_01_Normal.png",
+    "limit": 512,
+    "previous_limit": 0,
+    "previous_pack_mb": 1.996,
+    "reason": "Distant tree detail"
+  },
+  {
+    "path": "models/burgerpack/try2/SM_BurgerPackagingPaper_T_BurgerPackaging_N.png.import",
+    "source": "models/burgerpack/try2/SM_BurgerPackagingPaper_T_BurgerPackaging_N.png",
+    "limit": 1024,
+    "previous_limit": 0,
+    "previous_pack_mb": 1.83,
+    "reason": "Small prop surface normal detail"
+  },
+  {
+    "path": "models/burgerpack/try2/SM_ChefsKnife_T_CuttingBoard_N.png.import",
+    "source": "models/burgerpack/try2/SM_ChefsKnife_T_CuttingBoard_N.png",
+    "limit": 1024,
+    "previous_limit": 0,
+    "previous_pack_mb": 1.788,
+    "reason": "Small prop surface normal detail"
+  },
+  {
+    "path": "models/burgerpack/try2/SM_Tree_Large_01_MI_Bark_Tree_Large_01_SM_Tree_Large_01_BaseColor.png.import",
+    "source": "models/burgerpack/try2/SM_Tree_Large_01_MI_Bark_Tree_Large_01_SM_Tree_Large_01_BaseColor.png",
+    "limit": 512,
+    "previous_limit": 0,
+    "previous_pack_mb": 1.421,
+    "reason": "Distant tree detail"
+  },
+  {
+    "path": "assets/ui/phone_grubbah_icon.png.import",
+    "source": "assets/ui/phone_grubbah_icon.png",
+    "limit": 512,
+    "previous_limit": 0,
+    "previous_pack_mb": 1.415,
+    "reason": "Small phone app icon"
+  },
+  {
+    "path": "models/burgerpack/try2/SM_GrillSpatula_T_BurgerTools_V.png.import",
+    "source": "models/burgerpack/try2/SM_GrillSpatula_T_BurgerTools_V.png",
+    "limit": 512,
+    "previous_limit": 0,
+    "previous_pack_mb": 1.365,
+    "reason": "Small prop surface properties"
+  },
+  {
+    "path": "models/burgerpack/try2/SM_SpiceShaker_T_BurgerTools_V.png.import",
+    "source": "models/burgerpack/try2/SM_SpiceShaker_T_BurgerTools_V.png",
+    "limit": 512,
+    "previous_limit": 0,
+    "previous_pack_mb": 1.365,
+    "reason": "Small prop surface properties"
+  },
+  {
+    "path": "models/burgerpack/try2/SM_GrillSpatula_T_BurgerTools_N.png.import",
+    "source": "models/burgerpack/try2/SM_GrillSpatula_T_BurgerTools_N.png",
+    "limit": 1024,
+    "previous_limit": 0,
+    "previous_pack_mb": 1.323,
+    "reason": "Small prop surface normal detail"
+  },
+  {
+    "path": "models/burgerpack/try2/SM_SpiceShaker_T_BurgerTools_N.png.import",
+    "source": "models/burgerpack/try2/SM_SpiceShaker_T_BurgerTools_N.png",
+    "limit": 1024,
+    "previous_limit": 0,
+    "previous_pack_mb": 1.323,
+    "reason": "Small prop surface normal detail"
+  },
+  {
+    "path": "models/burgerpack/try2/SM_KetchupSqueezeBottle_T_SqueezeBottles_N.png.import",
+    "source": "models/burgerpack/try2/SM_KetchupSqueezeBottle_T_SqueezeBottles_N.png",
+    "limit": 1024,
+    "previous_limit": 0,
+    "previous_pack_mb": 1.286,
+    "reason": "Small prop surface normal detail"
+  },
+  {
+    "path": "models/burgerpack/try2/SM_MustardSqueezeBottle_T_SqueezeBottles_N.png.import",
+    "source": "models/burgerpack/try2/SM_MustardSqueezeBottle_T_SqueezeBottles_N.png",
+    "limit": 1024,
+    "previous_limit": 0,
+    "previous_pack_mb": 1.286,
+    "reason": "Small prop surface normal detail"
+  },
+  {
+    "path": "models/burgerpack/try2/SM_TreeBirch_02_MI_TreeLeaf_Birch_SM_TreeBirch_02_BaseColor.png.import",
+    "source": "models/burgerpack/try2/SM_TreeBirch_02_MI_TreeLeaf_Birch_SM_TreeBirch_02_BaseColor.png",
+    "limit": 512,
+    "previous_limit": 0,
+    "previous_pack_mb": 1.191,
+    "reason": "Distant tree detail"
+  },
+  {
+    "path": "assets/ui/phone_shop_icon.png.import",
+    "source": "assets/ui/phone_shop_icon.png",
+    "limit": 512,
+    "previous_limit": 0,
+    "previous_pack_mb": 1.182,
+    "reason": "Small phone app icon"
+  },
+  {
+    "path": "models/burgerpack/try2/SM_BurgerPackagingPaper_T_BurgerPackaging_V.png.import",
+    "source": "models/burgerpack/try2/SM_BurgerPackagingPaper_T_BurgerPackaging_V.png",
+    "limit": 512,
+    "previous_limit": 0,
+    "previous_pack_mb": 0.862,
+    "reason": "Small prop surface properties"
+  },
+  {
+    "path": "models/burgerpack/try2/SM_FastFoodBagClosed_T_FastFoodBag_V.png.import",
+    "source": "models/burgerpack/try2/SM_FastFoodBagClosed_T_FastFoodBag_V.png",
+    "limit": 512,
+    "previous_limit": 0,
+    "previous_pack_mb": 0.853,
+    "reason": "Small prop surface properties"
+  },
+  {
+    "path": "models/burgerpack/try2/SM_FastFoodBagCrumpled_T_FastFoodBag_V.png.import",
+    "source": "models/burgerpack/try2/SM_FastFoodBagCrumpled_T_FastFoodBag_V.png",
+    "limit": 512,
+    "previous_limit": 0,
+    "previous_pack_mb": 0.853,
+    "reason": "Small prop surface properties"
+  },
+  {
+    "path": "models/burgerpack/try2/SM_FastFoodBagOpen_T_FastFoodBag_V.png.import",
+    "source": "models/burgerpack/try2/SM_FastFoodBagOpen_T_FastFoodBag_V.png",
+    "limit": 512,
+    "previous_limit": 0,
+    "previous_pack_mb": 0.853,
+    "reason": "Small prop surface properties"
+  },
+  {
+    "path": "models/burgerpack/try2/SM_KetchupSqueezeBottle_T_SqueezeBottles_V.png.import",
+    "source": "models/burgerpack/try2/SM_KetchupSqueezeBottle_T_SqueezeBottles_V.png",
+    "limit": 512,
+    "previous_limit": 0,
+    "previous_pack_mb": 0.834,
+    "reason": "Small prop surface properties"
+  },
+  {
+    "path": "models/burgerpack/try2/SM_MustardSqueezeBottle_T_SqueezeBottles_V.png.import",
+    "source": "models/burgerpack/try2/SM_MustardSqueezeBottle_T_SqueezeBottles_V.png",
+    "limit": 512,
+    "previous_limit": 0,
+    "previous_pack_mb": 0.834,
+    "reason": "Small prop surface properties"
+  },
+  {
+    "path": "models/burgerpack/try2/SM_ChefsKnife_T_CuttingBoard_V.png.import",
+    "source": "models/burgerpack/try2/SM_ChefsKnife_T_CuttingBoard_V.png",
+    "limit": 512,
+    "previous_limit": 0,
+    "previous_pack_mb": 0.793,
+    "reason": "Small prop surface properties"
+  },
+  {
+    "path": "models/burgerpack/try2/SM_Tree_Large_01_MI_TreeLeaf_Large_SM_Tree_Large_01_BaseColor.png.import",
+    "source": "models/burgerpack/try2/SM_Tree_Large_01_MI_TreeLeaf_Large_SM_Tree_Large_01_BaseColor.png",
+    "limit": 512,
+    "previous_limit": 0,
+    "previous_pack_mb": 0.557,
+    "reason": "Distant tree detail"
+  },
+  {
+    "path": "models/burgerpack/try2/SM_Tree_Large_01_MI_Bark_Tree_Large_01_SM_Tree_Large_01_MetallicRoughness.png.import",
+    "source": "models/burgerpack/try2/SM_Tree_Large_01_MI_Bark_Tree_Large_01_SM_Tree_Large_01_MetallicRoughness.png",
+    "limit": 512,
+    "previous_limit": 0,
+    "previous_pack_mb": 0.154,
+    "reason": "Distant tree detail"
+  },
+  {
+    "path": "models/burgerpack/try2/SM_TreeBirch_02_MI_Bark_Tree_Medium_01_SM_TreeBirch_02_BaseColor.png.import",
+    "source": "models/burgerpack/try2/SM_TreeBirch_02_MI_Bark_Tree_Medium_01_SM_TreeBirch_02_BaseColor.png",
+    "limit": 512,
+    "previous_limit": 0,
+    "previous_pack_mb": 0.034,
+    "reason": "Distant tree detail"
+  },
+  {
+    "path": "models/burgerpack/try2/SM_TreeBirch_02_MI_Bark_Tree_Medium_01_SM_TreeBirch_02_MetallicRoughness.png.import",
+    "source": "models/burgerpack/try2/SM_TreeBirch_02_MI_Bark_Tree_Medium_01_SM_TreeBirch_02_MetallicRoughness.png",
+    "limit": 512,
+    "previous_limit": 0,
+    "previous_pack_mb": 0.025,
+    "reason": "Distant tree detail"
+  },
+  {
+    "path": "models/burgerpack/try2/SM_TreeBirch_02_MI_Bark_Tree_Medium_01_SM_TreeBirch_02_Normal.png.import",
+    "source": "models/burgerpack/try2/SM_TreeBirch_02_MI_Bark_Tree_Medium_01_SM_TreeBirch_02_Normal.png",
+    "limit": 512,
+    "previous_limit": 0,
+    "previous_pack_mb": 0.01,
+    "reason": "Distant tree detail"
+  }
+]
