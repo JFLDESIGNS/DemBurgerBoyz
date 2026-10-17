@@ -10,21 +10,7 @@ static func play(game: Node, customer: Node3D, special: bool) -> void:
 	await game.get_tree().create_timer(1.95 if special else .85).timeout
 	if not is_instance_valid(customer):return
 	if is_instance_valid(customer._burger_props):customer._burger_props.hide()
-	# Visible notes leave the customer's hand and land toward the serving counter.
-	for i in (9 if special else 1):
-		var note := MeshInstance3D.new()
-		var mesh := BoxMesh.new();mesh.size=Vector3(.16,.006,.075);note.mesh=mesh
-		var mat := StandardMaterial3D.new();mat.albedo_color=Color("91b984");note.material_override=mat
-		game.add_child(note);note.global_position=customer.global_position+Vector3(.2,1.5,.0)
-		var start := note.global_position
-		var end := start+Vector3((i-4)*.12 if special else 0.0,-.35,-1.0)
-		var tween := note.create_tween()
-		tween.tween_method(func(t: float):
-			if is_instance_valid(note):
-				note.global_position=start.lerp(end,t)+Vector3.UP*sin(t*PI)*(.65 if special else .15)
-				note.rotation=Vector3(t*PI*2,t*i*.4,t*.7)
-		,0.0,1.0,.8)
-		tween.tween_interval(.3);tween.tween_callback(note.queue_free)
+	fly_to_hud(game,customer,special)
 	await game.get_tree().create_timer(.65 if special else .75).timeout
 	if not is_instance_valid(customer):return
 	customer._anim_player.stop();customer._reset_skeleton_pose()
@@ -55,3 +41,33 @@ static func story(game: Node, customer: Node3D) -> void:
 	var image := TextureRect.new();image.texture=ImageTexture.create_from_image(photo.get_region(rect));image.custom_minimum_size=Vector2(260,250);image.expand_mode=TextureRect.EXPAND_IGNORE_SIZE;image.stretch_mode=TextureRect.STRETCH_KEEP_ASPECT_COVERED;column.add_child(image)
 	var caption := Label.new();caption.text="Found my next burger spot!\nCamera eats first.  #BurgerPals\n♥  5 friends are on their way";column.add_child(caption)
 	var tween := panel.create_tween();panel.modulate.a=0;tween.tween_property(panel,"modulate:a",1.0,.2);tween.tween_interval(4.5);tween.tween_property(panel,"modulate:a",0.0,.3);tween.tween_callback(layer.queue_free)
+
+
+static func fly_to_hud(game: Node, customer: Node3D, special: bool) -> void:
+	customer.set_meta("cash_released",true)
+	if is_instance_valid(game.game_audio):game.game_audio.play_customer_cash_chaching()
+	var viewport: Viewport=game.get_viewport()
+	var camera: Camera3D=viewport.get_camera_3d()
+	if camera==null:return
+	var layer := CanvasLayer.new();layer.layer=36;game.add_child(layer)
+	var start := camera.unproject_position(customer.global_position+Vector3(.2,1.5,0))
+	var target := viewport.get_visible_rect().size*Vector2(.92,.07)
+	if is_instance_valid(game.hud_money):target=game.hud_money.get_global_rect().get_center()
+	for i in (9 if special else 5):
+		var bill := TextureRect.new();bill.texture=game._make_tip_bill_texture()
+		bill.expand_mode=TextureRect.EXPAND_IGNORE_SIZE;bill.size=Vector2(76,38)
+		bill.pivot_offset=bill.size*.5;bill.mouse_filter=Control.MOUSE_FILTER_IGNORE
+		layer.add_child(bill);bill.position=start-bill.pivot_offset;bill.modulate.a=0
+		var bend := start.lerp(target,.45)+Vector2((i-4)*24,-90)
+		var tween := bill.create_tween();tween.tween_interval(i*.045)
+		tween.tween_callback(func():bill.modulate.a=1)
+		tween.tween_method(func(t: float):
+			bill.position=start.lerp(bend,t).lerp(bend.lerp(target,t),t)-bill.pivot_offset
+			bill.rotation=sin(t*TAU+i)*.3
+			bill.scale=Vector2.ONE*lerpf(1.0,.3,t)
+			bill.modulate.a=1.0-smoothstep(.8,1.0,t)
+		,0.0,1.0,.8)
+	var cleanup := layer.create_tween();cleanup.tween_interval(1.25)
+	cleanup.tween_callback(func():
+		if is_instance_valid(game.hud_money):game._punch_hud_money()
+		layer.queue_free())

@@ -73222,10 +73222,11 @@ func _fly_sale_bills_to_hud(customer: Node3D, count: int) -> void:
 
 func _play_sale_payout_fx(customer: Node3D, base: int, tip: int, from_shown: float, to_amount: float) -> void:
 	var perf_started := Time.get_ticks_usec() if OS.is_debug_build() else 0
-	if game_audio != null and game_audio.has_method("play_chaching"):
+	var animated_cash := is_instance_valid(customer) and (bool(customer.get_meta("cash_sequence_pending",false)) or bool(customer.get_meta("cash_released",false)))
+	if not animated_cash and game_audio != null and game_audio.has_method("play_chaching"):
 		game_audio.play_chaching()
 	var hud_n: int = clampi(4 + int(maxi(base + tip, 1) / 3), 5, 10)
-	_fly_sale_bills_to_hud(customer, hud_n)
+	if not animated_cash:_fly_sale_bills_to_hud(customer, hud_n)
 	_fly_pay_bills_to_tip_jar(customer, 1)
 	_start_hud_money_climb(from_shown, to_amount)
 	if OS.is_debug_build():

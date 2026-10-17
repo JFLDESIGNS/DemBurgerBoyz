@@ -4129,3 +4129,12 @@ func start_ingredient_fall_whistle(duration: float) -> AudioStreamPlayer:
 
 func play_opening_whoosh(sign_flip: bool = false) -> void:
 	_play_cached("serve_whoosh",_make_serve_whoosh,1.25 if sign_flip else .90,.60 if sign_flip else .4875)
+
+
+func play_customer_cash_chaching() -> void:
+	var gain := .85 * _sfx("service")
+	if gain <= .0001:return
+	var player := AudioStreamPlayer.new()
+	player.stream=preload("res://sounds/customer_cartoon_chaching.mp3")
+	player.bus="SFX";player.pitch_scale=1.28;player.volume_db=linear_to_db(gain)
+	add_child(player);player.finished.connect(player.queue_free);player.play()
