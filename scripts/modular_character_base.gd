@@ -3503,7 +3503,7 @@ func animate_customer_eyes(target: Vector3, strength: float, blink_amount: float
 		# clips their far side. A radial limit made downward grill gaze consume
 		# nearly all the sideways motion on wide/large-pupil presets.
 		var travel := maxf(0.38, 0.98 - radius)
-		var displacement := Vector2(head_direction.x * 0.65, head_direction.y * 0.45)
+		var displacement := Vector2(head_direction.x * 0.78, head_direction.y * 0.50)
 		var eye_side := signf((head_basis.inverse() * (eye.global_position - _eyes_root.global_position)).x)
 		var near_eye_boost := 1.0 + 0.15 * smoothstep(0.02, 0.35, head_direction.x * eye_side)
 		displacement.x *= near_eye_boost

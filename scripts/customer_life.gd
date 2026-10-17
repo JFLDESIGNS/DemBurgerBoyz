@@ -124,7 +124,7 @@ func _process(delta: float) -> void:
 		if gaze_cooldown <= 0.0:
 			gaze_left = rng.randf_range(GAZE_WATCH_SECONDS.x, GAZE_WATCH_SECONDS.y)
 			gaze_cooldown = rng.randf_range(GAZE_BREAK_SECONDS.x, GAZE_BREAK_SECONDS.y)
-			with_head = true
+			with_head = rng.randf() < 0.35
 			choose_away_target(target)
 			prefer_burger = rng.randf() < 0.3
 	var looking_away := waiting and idle_allows_gaze and gaze_left <= 0.0 and not forced_target.is_finite() and not tap_active
@@ -145,7 +145,7 @@ func _process(delta: float) -> void:
 	if waiting and dance_left <= 0.0:
 		if phone_active:
 			body_goal = 0.24 if int(customer.get_instance_id()) % 2 == 0 else -0.24
-		elif tracking and is_instance_valid(look):
+		elif tracking and (with_head or forced_target.is_finite() or tap_active) and is_instance_valid(look):
 			var rig := look.get_skeleton()
 			if rig != null:
 				var local_target := rig.to_local(target_world)
@@ -157,7 +157,7 @@ func _process(delta: float) -> void:
 	if is_instance_valid(look):
 		look.target_world = target_world
 		# Head and pupils share a smoothed target; phone clips keep their authored downward pose.
-		var head_goal := gaze_strength * (0.45 if phone_active else (0.95 if forward else 0.78))
+		var head_goal := gaze_strength * (0.45 if phone_active else ((0.70 if forward else 0.58) if with_head or forced_target.is_finite() or tap_active else 0.0))
 		look.look_weight = move_toward(look.look_weight, head_goal, delta * 2.5)
 	# Quick lid closure and a slightly slower reopening, with independent clocks.
 	blink_wait -= delta

@@ -4,3 +4,4 @@ License: Creative Commons Zero (CC0)
 https://creativecommons.org/publicdomain/zero/1.0/
 Downloaded public high quality MP3 preview on 2026-10-17.
 Played at 1.28x pitch/speed for a brighter cartoon register effect.
+Short WAV derivative: last 0.2 seconds of pitched playback removed; 25 ms tail fade.

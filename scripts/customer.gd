@@ -517,7 +517,7 @@ static func lane_x_for(lane_i: int) -> float:
 
 
 func _wait_z() -> float:
-	return WAIT_Z + float(get_meta("meal_queue_slot",0))*QUEUE_SPACING + (DISGUISE_CAT_WAIT_Z_OFFSET if is_disguise_cat else 0.0)
+	return float(get_meta("meal_queue_depth",WAIT_Z + float(get_meta("meal_queue_slot",0))*QUEUE_SPACING)) + (DISGUISE_CAT_WAIT_Z_OFFSET if is_disguise_cat else 0.0)
 
 
 func _roll_personality() -> void:
@@ -5313,20 +5313,29 @@ func stop_mouth_speech() -> void:
 	if speech!=null:speech.stop()
 
 
+var _cat_detour_depth: float = 0.0
+
 func _avoid_visiting_cat(delta: float) -> void:
 	if mp_host_driven: return
 	var game = get_tree().current_scene
 	if not is_instance_valid(game): return
+	var cats: Array = []
 	var cat = game.get("window_cat")
+	if is_instance_valid(cat): cats.append(cat)
+	var mail = game.get("mail_delivery_truck")
+	if is_instance_valid(mail) and is_instance_valid(mail.get("courier")): cats.append(mail.courier)
 	var target_z := _wait_z() + (_service_backstep if is_leaving else 0.0)
-	if is_instance_valid(cat) and cat.visible:
-		var radius: float = .65 + float(cat._fat) * .18 + float(cat._giant) * .35
-		var gap := absf(global_position.x - cat.global_position.x)
-		if gap < radius + .5 and absf(target_z - cat.global_position.z) < radius:
-			# Arc toward the street well before reaching the cat, then settle back.
-			var amount := 1.0 - smoothstep(radius*.45,radius+.5,gap)
-			target_z = lerpf(target_z,cat.global_position.z+radius+.25,amount)
-	global_position.z = move_toward(global_position.z,target_z,delta*2.8)
+	for obstacle in cats:
+		if not obstacle.is_visible_in_tree(): continue
+		var radius: float = 1.15
+		if obstacle == cat: radius += float(cat._fat)*.18 + float(cat._giant)*.35
+		var gap: float = absf(global_position.x-obstacle.global_position.x)
+		if gap < radius+1.4 and absf(_wait_z()-obstacle.global_position.z)<radius:
+			var amount: float = 1.0-smoothstep(radius*.7,radius+1.4,gap)
+			target_z=maxf(target_z,lerpf(_wait_z(),obstacle.global_position.z+radius+.3,amount))
+	var baseline: float = _wait_z()+(_service_backstep if is_leaving else 0.0)
+	_cat_detour_depth=move_toward(_cat_detour_depth,target_z-baseline,delta*3.5)
+	global_position.z=baseline+_cat_detour_depth
 
 func pet_cat() -> void:
 	if _eating or is_leaving or is_ragdoll or not is_waiting or not is_instance_valid(_anim_player): return

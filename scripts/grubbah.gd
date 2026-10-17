@@ -39,6 +39,7 @@ var total_label: Label
 var arrival_tween: Tween
 var action: Button
 var decline: Button
+var takeout_customer: Node3D
 var ticket_owner: Node3D
 var wrap_button: Button
 var paper3d: Node3D
@@ -132,6 +133,8 @@ func refresh() -> void:
  wrap_button.visible=false and game.playing and phase=="bagging" and game.selected_customer==ticket_owner
  wrap_button.text="PACK SIDES + SEAL" if phase=="bagging" else "WRAP BURGER"
 func sync_ticket() -> void:
+ if bool(state.get("takeout",false)) or is_instance_valid(takeout_customer):
+  sync_takeout_ticket();return
  var live=game.playing and not game._hotdog_active() and str(state.get("phase","")) in ["accepted","paper","wrapping","bagging"]
  if not live:
   if is_instance_valid(ticket_owner):
@@ -226,7 +229,12 @@ func _process(delta: float) -> void:
     if burger_ready():consume_build();set_phase("bagging")
     else:set_phase("paper")
    elif phase=="bagging" and age>=BURGER_BAG_FLIGHT:try_seal_bag()
-   elif phase=="sealed" and age>=BAG_PICKUP_FLIGHT:set_phase("pickup")
+   elif phase=="sealed" and age>=BAG_PICKUP_FLIGHT:
+    if bool(state.get("takeout",false)):pay_order();set_phase("takeout_paid")
+    else:set_phase("pickup")
+   elif phase=="takeout_paid" and age>=1.2:set_phase("takeout_leave")
+   elif phase=="takeout_leave" and age>=4.0:
+    finish_takeout_review();state={};wait_time=randf_range(55,110);publish()
    elif phase=="pickup" and age>=DRIVER_APPROACH+DRIVER_WALK+DRIVER_GRAB:
     pay_order();set_phase("collected")
    elif phase=="collected" and age>=DRIVER_TURN+DRIVER_RETREAT+DRIVER_RETURN+DRIVER_EXIT:
@@ -300,6 +308,8 @@ func try_seal_bag(peer: int = 0) -> bool:
  if age<BURGER_BAG_FLIGHT:
   if peer>0:notice("Burger going in!",peer)
   return false
+ if bool(state.get("takeout",false)) and int(state.get("burgers_packed",0))<int(state.get("burger_count",1)):
+  set_phase("paper");return false
  pack_ready_sides()
  for id in required_sides():
   if not state.get("side_packs",{}).has(id):
@@ -410,6 +420,10 @@ func burger_ready() -> bool:
  if not items.has("bun_top"):items.append("bun_top")
  return not st.get("patties",[]).is_empty() and items.has("bun_bottom") and not game._station_sauce_in_flight(0)
 func consume_build() -> void:
+ state["burgers_packed"]=int(state.get("burgers_packed",0))+1
+ var packed: Array=state.get("all_packed_items",[])
+ packed.append_array(state.get("packed_burger_items",[]));state["all_packed_items"]=packed
+ state["batch_quality"]=minf(float(state.get("batch_quality",1.0)),float(state.get("quality",1.0)))
  var pic=game._make_review_burger_snapshot(0)
  if pic!=null:state["photo"]=pic.get_image().save_png_to_buffer()
  game._clear_station(0)
@@ -439,20 +453,22 @@ func snapshot(data: Dictionary, rev: int, elapsed: float, owner: int) -> void:
  if not same_phase: age=elapsed
  knife_owner=owner;refresh()
  game._refresh_customer_queue_timers()
- if bool(state.get("selected",false)) and int(state.get("order_revision",0))>=game._mp_order_revision and is_instance_valid(ticket_owner) and ticket_owner.is_waiting and not is_selected():game.mp_order_selected(1000000+int(state.number),int(state.get("order_revision",0)))
+ if bool(state.get("selected",false)) and int(state.get("order_revision",0))>=game._mp_order_revision and is_instance_valid(ticket_owner) and ticket_owner.is_waiting and not is_selected():game.mp_order_selected(game._customer_net_id(ticket_owner),int(state.get("order_revision",0)))
 func pay_order() -> void:
  if bool(state.get("paid",false)):return
  state.paid=true
- var base=int(state.base);var tip=int(round(float(base)*.25*clampf(float(state.quality),0,1)))
+ var base=int(state.base);var tip=int(round(float(base)*.25*clampf(minf(float(state.get("batch_quality",state.quality)),float(state.quality)),0,1)))
+ state["tip_paid"]=tip
  var cost=0.0
- for id in state.get("packed_burger_items",state.items)+state.get("side_packs",{}).keys():
+ for id in state.get("all_packed_items",state.get("packed_burger_items",state.items))+state.get("side_packs",{}).keys():
   if str(id) in game.SUPPLY_IDS:cost+=game._supply_buy_unit_cost(str(id))
  if not DATA.order_soda_ids(state.get("side_packs",{}).keys()).is_empty():cost+=game._supply_buy_unit_cost("syrup_cola")*game.SUPPLY_BUY_PACK*game.SODA_TANK_CUP_COST/game.SODA_TANK_SYRUP_REFILL
  cost+=DATA.order_fries_count(state.items)*game._supply_buy_unit_cost("potato")/2.0
  game.money+=base+tip;game.shift_food_sales+=base;game.shift_tips+=tip;game.total_served+=1
  game._achievement_event("orders");game._achievement_event("earnings",base+tip)
  game.order_history_revision+=1
- game.order_history.append({"number":game.order_history_revision,"day":game.day,"items":"Grubbah "+display_number()+" · "+", ".join(state.items),"sale":base,"tip":tip,"cost":cost,"profit":base+tip-cost,"perfect":bool(state.get("recipe_perfect",true)) and float(state.quality)>=1,"photo":state.get("photo",PackedByteArray())})
+ state["sale_number"]=game.order_history_revision
+ game.order_history.append({"number":game.order_history_revision,"day":game.day,"items":("Takeout " if bool(state.get("takeout",false)) else "Grubbah ")+display_number()+" · "+", ".join(state.items),"sale":base,"tip":tip,"cost":cost,"profit":base+tip-cost,"perfect":bool(state.get("recipe_perfect",true)) and float(state.quality)>=1,"photo":state.get("photo",PackedByteArray())})
  if game.order_history.size()>100:game.order_history.pop_front()
  game._show_order_profit(base+tip,cost);game._update_hud()
  if is_instance_valid(game._order_insights):game._order_insights.refresh()
@@ -730,6 +746,7 @@ func update_visuals(_delta: float) -> void:
   if return_age>=DRIVER_RETURN and not departure_screeched:
    departure_screeched=true;screech.play()
   _pose_driver_car(clampf((return_age-DRIVER_RETURN)/DRIVER_EXIT,0,1), 10.0, 24.0)
+ if bool(state.get("takeout",false)):update_takeout_visuals(phase,age)
  knife.visible=bool(game.owned_machines.get("chef_knife",false))
  knife.scale=Vector3.ONE*(.8 if knife_owner!=0 else 1.0)
  if knife_owner!=0:knife.rotation=Vector3(-.20,PI*.5+.30,0)
@@ -853,6 +870,7 @@ func announce_arrival(owner: Node3D) -> void:
 
 func display_number() -> String:
  var code=DATA.order_number_code(state.get("items",[]))
+ if bool(state.get("takeout",false)):return "TO GO %d/%d" % [mini(int(state.get("burgers_packed",0))+1,int(state.burger_count)),int(state.burger_count)]
  return "M"+(code if code!="" else str(state.get("number",0)))
 
 func courier_grab_position() -> Vector3:
@@ -916,6 +934,80 @@ func _cat_blocks_pickup() -> bool:
   var offset: Vector3=cat.global_position-spot
   if Vector2(offset.x,offset.z).length()<1.15:return true
  return false
+
+func begin_takeout(person: Node3D, count: int) -> void:
+ if not host() or not state.is_empty():return
+ takeout_customer=person
+ var items: Array=Array(person.order)
+ # Sides are packed once for the whole bag; each burger uses the same ticket recipe.
+ var burger: Array=items.filter(func(id):return not DATA.is_soda_item(str(id)) and id!="fries")
+ state={"number":next_number,"items":items,"phase":"accepted","selected":false,"takeout":true,"customer_id":game._customer_net_id(person),"burger_count":count,"burgers_packed":0,"base":DATA.order_value(burger)*count+DATA.order_value(items)-DATA.order_value(burger),"paid":false,"quality":1.0,"driver_preset":person.get_custom_character_preset(),"driver_skin":0,"car_style":0}
+ next_number+=1;age=0;publish()
+
+func sync_takeout_ticket() -> void:
+ if state.is_empty():
+  if is_instance_valid(takeout_customer):
+   game._customer_leave_apply(takeout_customer,false)
+   takeout_customer.queue_free()
+  takeout_customer=null;ticket_owner=null
+  return
+ if not is_instance_valid(takeout_customer):takeout_customer=game._customer_by_net_id(int(state.get("customer_id",-1)))
+ if not is_instance_valid(takeout_customer):return
+ ticket_owner=takeout_customer
+ var phase: String=str(state.phase)
+ ticket_owner.set_meta("mobile_order",true);ticket_owner.set_meta("takeout_order",true)
+ if phase in ["sealed","takeout_paid","takeout_leave"]:
+  ticket_owner.is_waiting=false
+  if game.tickets.has(ticket_owner):prepare_bag_ticket();game._remove_ticket(ticket_owner)
+  if game.selected_customer==ticket_owner:game.selected_customer=null;game._resolve_serve_customer()
+  ticket_owner.set_process(false)
+  return
+ if not ticket_owner.is_waiting:return
+ if not game.tickets.has(ticket_owner):game._create_ticket(ticket_owner)
+ if game.tickets.has(ticket_owner):
+  var wrap=game.tickets[ticket_owner]
+  if wrap.has_meta("title_label"):wrap.get_meta("title_label").text=display_number()
+ var packed: Dictionary=state.get("side_packs",{})
+ ticket_owner.set_meta("soda_handed",not DATA.order_soda_ids(items_for_takeout()).is_empty() and packed.has(str(DATA.order_soda_ids(items_for_takeout())[0])))
+ ticket_owner.set_meta("fries_handed",packed.has("fries"))
+
+func items_for_takeout() -> Array:return state.get("items",[])
+
+func takeout_hand_position() -> Vector3:
+ if not is_instance_valid(takeout_customer):return ledge.position
+ var skeleton=takeout_customer.find_child("Skeleton3D",true,false) as Skeleton3D
+ if skeleton!=null:
+  var hand=skeleton.find_bone("LeftHand")
+  if hand>=0:return props.to_local(skeleton.to_global(skeleton.get_bone_global_pose(hand).origin))-Vector3(0,.20,0)
+ return props.to_local(takeout_customer.global_position+Vector3(.3,.8,0))
+
+func update_takeout_visuals(phase: String, elapsed: float) -> void:
+ car.hide();courier.hide()
+ if not is_instance_valid(takeout_customer):return
+ if phase=="sealed":
+  bag.position=pickup_bag_position(clampf(elapsed/BAG_PICKUP_FLIGHT,0,1),bag_station_pos(),takeout_hand_position())
+  bag_ticket.show()
+ elif phase in ["takeout_paid","takeout_leave"]:
+  bag.show();bag_ticket.show();bag.position=takeout_hand_position();bag.scale=Vector3.ONE*.85
+  if phase=="takeout_paid" and not bool(takeout_customer.get_meta("takeout_cash_started",false)):
+   takeout_customer.set_meta("takeout_cash_started",true)
+   takeout_customer.set_meta("cash_payment_amount",int(state.base)+int(state.get("tip_paid",0)))
+   takeout_customer.set_meta("cash_tip_amount",int(state.get("tip_paid",0)))
+   preload("res://scripts/customer_cash_sequence.gd").play(game,takeout_customer,false)
+  if phase=="takeout_leave":
+   if not takeout_customer.has_meta("takeout_exit_start"):
+    takeout_customer.set_meta("takeout_exit_start",takeout_customer.global_position)
+    takeout_customer.rotation.y=PI*.5;takeout_customer._play_anim("walk")
+    game._customer_leave_apply(takeout_customer,false)
+   takeout_customer.global_position=Vector3(takeout_customer.get_meta("takeout_exit_start"))+Vector3(elapsed*2.8,0,0)
+   bag.position=takeout_hand_position()
+
+func finish_takeout_review() -> void:
+ if not is_instance_valid(takeout_customer):return
+ var quality: float=clampf(minf(float(state.get("batch_quality",state.quality)),float(state.quality)),0,1)
+ var stars: float=clampf(1.0+quality*4.0,1.0,5.0)
+ takeout_customer.set_meta("sales_number",int(state.get("sale_number",game.order_history_revision)))
+ game._commit_social_review(stars,"good" if stars>=4 else "meh",int(state.get("tip_paid",0)),-1,takeout_customer)
 
 
 func _update_pickup_block() -> void:

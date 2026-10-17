@@ -182,7 +182,7 @@ func boss_peek(style: int) -> void:
  var tucked: Vector3
  match style:
   0:
-   target = Vector3(3.1572,1.86,2.35) # 1.5 feet toward screen-left for the wider window.
+   target = Vector3(3.1572,1.70,2.35) # 1.5 feet toward screen-left for the wider window.
    tucked = target + Vector3(1.0,0,0)
    visit.rotation_degrees.z = 62.0
   1:

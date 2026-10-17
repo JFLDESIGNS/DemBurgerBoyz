@@ -63206,6 +63206,7 @@ func _refresh_challenge_ticket(customer: Node3D = null) -> void:
 				title_lab.text = "%d×  %s" % [_challenge_remaining, order_code if order_code != "" else "—"]
 			else:
 				title_lab.text = ("M" if bool(cust.get_meta("mobile_order",false)) else "") + (order_code if order_code != "" else (str(cust.get_meta("mobile_number",1)) if bool(cust.get_meta("mobile_order",false)) else "—"))
+				if bool(cust.get_meta("takeout_order",false)) and is_instance_valid(_grubbah):title_lab.text=_grubbah.display_number()
 
 
 func _pick_challenge_size() -> void:
@@ -63629,6 +63630,9 @@ func _spawn_customer(grisaldi_referral: bool = false) -> void:
 	if not is_bts_guest:
 		custom_preset = CustomerScript.take_next_saved_character_preset()
 		if grisaldi_referral:custom_preset["grisaldi_referral"]=true
+		elif not tutorial_mode and order.has("patty") and is_instance_valid(_grubbah) and _grubbah.state.is_empty() and randf()<.18:
+			custom_preset["takeout_count"]=randi_range(2,3)
+			order.erase("icecream")
 	if mp_enabled:
 		if not NetManager.is_host() and not _mp_applying:
 			return
@@ -63699,6 +63703,11 @@ func _spawn_customer_local(
 		_mp_customer_net_ids[c.get_instance_id()] = net_id
 	customers_root.add_child(c)
 	customers.append(c)
+	if int(custom_preset.get("takeout_count",0))>=2 and is_instance_valid(_grubbah):
+		c.set_meta("mobile_order",true)
+		c.set_meta("takeout_order",true)
+		c.patience=99999;c.patience_max=99999
+		if not mp_enabled or NetManager.is_host():_grubbah.begin_takeout(c,int(custom_preset.takeout_count))
 	c.set_meta("mp_spawn_descriptor", {"order": Array(typed_order), "color": color, "patience": patience, "lane": lane, "skin": skin_idx, "face": face_style, "cat": disguise_cat, "fact": jin_fact_idx, "challenge": challenge_guest, "preset": c._custom_character_preset.duplicate(true)})
 	if disguise_cat and c.has_method("apply_disguise_cat_look"):
 		c.apply_disguise_cat_look()
@@ -64080,6 +64089,7 @@ func _create_ticket(customer: Node3D) -> void:
 	## Order code = strip hotkeys + C for cheese from the board wheel.
 	var order_code := GameDataScript.order_number_code(customer.order)
 	title.text = ("M" if bool(customer.get_meta("mobile_order",false)) else "") + (order_code if order_code != "" else (str(customer.get_meta("mobile_number",1)) if bool(customer.get_meta("mobile_order",false)) else "—"))
+	if bool(customer.get_meta("takeout_order",false)) and is_instance_valid(_grubbah):title.text=_grubbah.display_number()
 	var title_size := 20
 	if order_code.length() >= 7:
 		title_size = 15
@@ -81838,7 +81848,14 @@ func _update_meal_queue() -> void:
 		if int(person.get_meta("meal_queue_slot",slot)) != slot and not bool(person.get_meta("meal_stepping_aside",false)):
 			person.set_meta("meal_queue_slot",slot)
 			var move := person.create_tween()
-			move.tween_property(person,"global_position:z",CustomerScript.WAIT_Z+slot*CustomerScript.QUEUE_SPACING,.5)
+			var start_depth: float=person.global_position.z
+			var end_depth: float=CustomerScript.WAIT_Z+slot*CustomerScript.QUEUE_SPACING
+			person.set_meta("meal_queue_depth",start_depth)
+			move.tween_method(func(depth: float):
+				if is_instance_valid(person):
+					person.set_meta("meal_queue_depth",depth)
+					person.global_position.z=depth
+			,start_depth,end_depth,1.35).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 		slot+=1
 
 

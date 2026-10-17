@@ -1648,6 +1648,15 @@ func _setup_module_controls() -> void:
 	_add_adjustment_slider(eye_adjustments, "eye_pupil_inward", "Pupils in / out", -0.55, 0.55, 0.01, character.eye_pupil_inward, func(value: float) -> void: character.eye_pupil_inward = value)
 	_add_adjustment_slider(eye_adjustments, "eye_sclera_brightness", "Whites brightness", 0.15, 1.0, 0.01, character.eye_sclera_brightness, func(value: float) -> void: character.eye_sclera_brightness = value)
 	_add_adjustment_slider(eye_adjustments, "eyelid_scale", "Lid scale", 0.5, 2.2, 0.01, character.eyelid_scale, func(value: float) -> void: character.eyelid_scale = value)
+	var add_lids := Button.new()
+	add_lids.text = "Add eyelids (almond shape)"
+	add_lids.tooltip_text = "Enable eyelids, then adjust Lid height and Open height below."
+	eye_adjustments.add_child(add_lids)
+	add_lids.pressed.connect(func():
+		character.eyelid_enabled=true
+		character.lash_style=ModularCharacterBase.LashStyle.ALMOND
+		lash_select.select(int(character.lash_style))
+		_sync_adjustment_controls())
 	_add_adjustment_slider(eye_adjustments, "eyelid_width", "Lid width", 0.4, 2.0, 0.01, character.eyelid_width, func(value: float) -> void: character.eyelid_width = value)
 	_add_adjustment_slider(eye_adjustments, "eyelid_height", "Lid height", 0.4, 2.0, 0.01, character.eyelid_height, func(value: float) -> void: character.eyelid_height = value)
 	_add_adjustment_slider(eye_adjustments, "eyelid_depth", "Lid depth", 0.4, 2.0, 0.01, character.eyelid_depth, func(value: float) -> void: character.eyelid_depth = value)
