@@ -58,7 +58,8 @@ void fragment(){
   mat.set_shader_parameter("lift",.08)
   mat.set_shader_parameter("saturation",1.08)
  elif ingredient=="cheese":
-  mat.set_shader_parameter("tint",Vector3(1.0,.94,.85))
+  mat.set_shader_parameter("tint",Vector3(1.0,.9118,.8245))
+  mat.set_shader_parameter("saturation",1.02)
  material=mat
 
 func _process(delta: float) -> void:
@@ -78,7 +79,7 @@ func _process(delta: float) -> void:
  if not visible:return
  var inverse=get_global_transform_with_canvas().affine_inverse()
  bin_center=inverse*game.camera.unproject_position(fill.global_position)
- pile_center=bin_center+Vector2(0,0 if ingredient in ["tomato","cheese"] else 5)
+ pile_center=bin_center+Vector2(0,0 if ingredient in ["tomato","cheese","pickle","onion","lettuce"] else 5)
  bin_polygon.clear()
  # Use the actual rim, not the lowered fill plane: a low-stock plane can
  # project through the front wall even though it is inside the 3D container.
@@ -133,11 +134,11 @@ func _draw() -> void:
   "cheese":
    piece_scale=.726;brightness=.3298;max_count=1;flatten=.92;angles=[-.03,0.0,0.0]
   "tomato":
-   piece_scale=.57024;brightness=.558;max_count=2
+   piece_scale=.57024;brightness=.5022;max_count=2
   "lettuce":
    piece_scale=.4752;brightness=.414;max_count=2;angles=[-.23,.20,0.0]
   "onion":
-   piece_scale=.4752;brightness=.62
+   piece_scale=.4752;brightness=.589
   "pickle":
    piece_scale=.4752;brightness=.532
   "bacon":
