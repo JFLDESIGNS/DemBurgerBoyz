@@ -63,6 +63,7 @@ const DRIVER_CARS = [preload("res://assets/vehicles/sugar_street/lagoon_hatch.gl
 var car_ground_y: float = 0.0
 var screech: AudioStreamPlayer3D
 var arrival_screeched = false
+var departure_screeched = false
 var car: Node3D
 var ledge: MeshInstance3D
 var knife_owner = 0
@@ -209,6 +210,7 @@ func _process(delta: float) -> void:
   if not host():request_snapshot.rpc_id(1)
  remote_age+=delta
  age+=delta if host() else delta*clampf(1.0+(remote_age-age)*2.0,.8,1.2)
+ _update_pickup_block()
  sync_time+=delta;flash_time=maxf(0,flash_time-delta)
  advance_side_packs(delta)
  if host():
@@ -591,7 +593,7 @@ func update_visuals(_delta: float) -> void:
   last_phase=phase
   if phase=="accepted":side_impacts.clear();bag_bounce_age=10.0
   if phase=="pickup":
-   arrival_screeched=false
+   arrival_screeched=false;departure_screeched=false
    courier.remove_meta("slide_sounded")
    courier.remove_meta("grab_started")
    courier.remove_meta("step_in_started")
@@ -696,8 +698,15 @@ func update_visuals(_delta: float) -> void:
    if turn_age<DRIVER_FACE and is_instance_valid(courier._anim_player):courier._anim_player.pause()
    if turn_age>=DRIVER_FACE and walk_age<DRIVER_WALK and not courier.has_meta("step_in_started"):
     courier.set_meta("step_in_started",true);courier.play_street_run(1.45)
+  if bool(state.get("cat_blocked",false)):
+   courier.position=lane;courier.rotation.y=-PI
+   if not bool(courier.get_meta("cat_nervous",false)):
+    courier.set_meta("cat_nervous",true);courier._play_burger_clip("Impatient_Foot_Tap")
+   courier.rotation.y+=.12*sin(Time.get_ticks_msec()*.004)
+  elif bool(courier.get_meta("cat_nervous",false)):
+   courier.set_meta("cat_nervous",false);courier.play_street_run(1.45)
   courier.rotation.z=.16*sin(PI*clampf((walk_age-DRIVER_RUN)/DRIVER_SLIDE,0,1)) if sliding else 0.0
-  courier.set_meta("courier_running",courier.visible and (walk_age<DRIVER_RUN or (walk_age>=DRIVER_RUN+DRIVER_SLIDE+DRIVER_FACE and walk_age<DRIVER_WALK)))
+  courier.set_meta("courier_running",not bool(state.get("cat_blocked",false)) and courier.visible and (walk_age<DRIVER_RUN or (walk_age>=DRIVER_RUN+DRIVER_SLIDE+DRIVER_FACE and walk_age<DRIVER_WALK)))
   if walk_age>=DRIVER_WALK:
    var grab_time=clampf(walk_age-DRIVER_WALK,0,DRIVER_GRAB)*DRIVER_GRAB_SPEED
    if not courier.has_meta("grab_started"):
@@ -718,6 +727,8 @@ func update_visuals(_delta: float) -> void:
    courier.set_meta("return_running",true);courier.play_street_run(1.45)
   bag.position=courier_grab_position().lerp(courier_carry_position(),smoothstep(0,DRIVER_TURN,age))
   bag.rotation.y=courier.rotation.y-PI
+  if return_age>=DRIVER_RETURN and not departure_screeched:
+   departure_screeched=true;screech.play()
   _pose_driver_car(clampf((return_age-DRIVER_RETURN)/DRIVER_EXIT,0,1), 10.0, 24.0)
  knife.visible=bool(game.owned_machines.get("chef_knife",false))
  knife.scale=Vector3.ONE*(.8 if knife_owner!=0 else 1.0)
@@ -863,10 +874,10 @@ func courier_carry_position() -> Vector3:
 func _pose_driver_car(t: float, from_x: float, to_x: float) -> void:
  # Deterministic from replicated phase age; settles straight at either endpoint.
  var envelope := sin(PI * t)
- var weave := .22 * sin(t * TAU * 1.5) * envelope
+ var weave := .55 * sin(t * TAU * 1.5) * envelope
  car.position = Vector3(lerpf(from_x, to_x, t), car_ground_y, game.STREET_CAR_Z + .45 + weave)
- car.rotation.y = .075 * sin(t * TAU * 1.5 + PI * .5) * envelope
- car.rotation.z = -.018 * sin(t * TAU * 1.5) * envelope
+ car.rotation.y = .17 * sin(t * TAU * 1.5 + PI * .5) * envelope
+ car.rotation.z = -.035 * sin(t * TAU * 1.5) * envelope
 
 func _add_driver_roof_sign() -> void:
  var bounds: AABB = game._shop_preview_bounds(car)
@@ -893,3 +904,25 @@ func _add_driver_roof_sign() -> void:
   label.position=Vector3(0,.095,side*.146)
   label.rotation.y=0.0 if side>0 else PI
   sign_root.add_child(label)
+
+
+func _cat_blocks_pickup() -> bool:
+ var cats: Array=[]
+ if is_instance_valid(game.window_cat):cats.append(game.window_cat)
+ if is_instance_valid(game.mail_delivery_truck) and is_instance_valid(game.mail_delivery_truck.courier):cats.append(game.mail_delivery_truck.courier)
+ var spot: Vector3=props.to_global(Vector3(ledge.position.x,0,2.45))
+ for cat in cats:
+  if not cat.is_visible_in_tree():continue
+  var offset: Vector3=cat.global_position-spot
+  if Vector2(offset.x,offset.z).length()<1.15:return true
+ return false
+
+
+func _update_pickup_block() -> void:
+ if str(state.get("phase",""))=="pickup":
+  var stop_age: float=DRIVER_APPROACH+DRIVER_RUN+DRIVER_SLIDE+DRIVER_FACE
+  if host():
+   var blocked: bool=age>=stop_age and age<DRIVER_APPROACH+DRIVER_WALK and _cat_blocks_pickup()
+   if blocked:age=stop_age;remote_age=age
+   if blocked!=bool(state.get("cat_blocked",false)):state["cat_blocked"]=blocked;publish()
+  elif bool(state.get("cat_blocked",false)):age=minf(age,stop_age);remote_age=age

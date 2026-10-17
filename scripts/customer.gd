@@ -517,7 +517,7 @@ static func lane_x_for(lane_i: int) -> float:
 
 
 func _wait_z() -> float:
-	return WAIT_Z + (DISGUISE_CAT_WAIT_Z_OFFSET if is_disguise_cat else 0.0)
+	return WAIT_Z + float(get_meta("meal_queue_slot",0))*QUEUE_SPACING + (DISGUISE_CAT_WAIT_Z_OFFSET if is_disguise_cat else 0.0)
 
 
 func _roll_personality() -> void:
@@ -982,7 +982,7 @@ static func take_next_saved_character_preset() -> Dictionary:
 	for step in count:
 		var idx: int = (_saved_character_cycle_i + step) % count
 		var preset: Dictionary = _parse_saved_character_file(_saved_character_cycle[idx])
-		if preset.is_empty():
+		if preset.is_empty() or bool(preset.get("grisaldi",false)) or "grisal" in _saved_character_cycle[idx].to_lower() or (int(preset.get("top_style",0))==16 and int(preset.get("hair_style",0))==18):
 			continue
 		_saved_character_cycle_i = (idx + 1) % count
 		return preset
@@ -5247,7 +5247,7 @@ func react_burnt_bite(point_at_player: bool = false) -> void:
 		_anim_player.pause()
 
 
-func step_aside_for_meal(destination_x: float) -> void:
+func step_aside_for_meal(destination_x: float, destination_z: float = WAIT_Z) -> void:
 	if bool(get_meta("meal_aside", false)):return
 	_cancel_serve_celebration()
 	_cancel_order_announce()
@@ -5263,7 +5263,7 @@ func step_aside_for_meal(destination_x: float) -> void:
 	_play_anim("walk")
 	var walk_seconds := maxf(0.35, absf(destination_x-global_position.x) / LEAVE_WALK_SPEED)
 	var step := create_tween()
-	step.tween_property(self, "global_position:x", destination_x, walk_seconds).set_trans(Tween.TRANS_LINEAR)
+	step.tween_property(self, "global_position", Vector3(destination_x,global_position.y,destination_z), walk_seconds).set_trans(Tween.TRANS_LINEAR)
 	step.tween_callback(func():
 		set_meta("meal_stepping_aside", false)
 		rotation_degrees.y = _face_cook_yaw()

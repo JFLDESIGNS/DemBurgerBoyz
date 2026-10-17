@@ -40,7 +40,7 @@ static func story(game: Node, customer: Node3D) -> void:
 	var column := VBoxContainer.new();panel.add_child(column)
 	var title := Label.new();title.text="GRISALDI  •  JUST POSTED";title.add_theme_color_override("font_color",Color("ffca55"));column.add_child(title)
 	var image := TextureRect.new();image.texture=ImageTexture.create_from_image(photo.get_region(rect));image.custom_minimum_size=Vector2(260,250);image.expand_mode=TextureRect.EXPAND_IGNORE_SIZE;image.stretch_mode=TextureRect.STRETCH_KEEP_ASPECT_COVERED;column.add_child(image)
-	var caption := Label.new();caption.text="Found my next burger spot!\nCamera eats first.  #BurgerPals\n♥  5 friends are on their way";column.add_child(caption)
+	var caption := Label.new();caption.text="Great burger!  #BurgerPals\n♥  5 friends are on their way" if float(customer.get_meta("meal_stars",0))>=4.0 else "Tried Burger Pals today.\nThis order needs some work.";column.add_child(caption)
 	var tween := panel.create_tween();panel.modulate.a=0;tween.tween_property(panel,"modulate:a",1.0,.2);tween.tween_interval(4.5);tween.tween_property(panel,"modulate:a",0.0,.3);tween.tween_callback(layer.queue_free)
 
 
