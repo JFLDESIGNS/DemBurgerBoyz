@@ -4132,7 +4132,7 @@ func play_opening_whoosh(sign_flip: bool = false) -> void:
 
 
 func play_customer_cash_chaching() -> void:
-	var gain := .85 * _sfx("service")
+	var gain := .68 * _sfx("service")
 	if gain <= .0001:return
 	var player := AudioStreamPlayer.new()
 	player.stream=preload("res://sounds/customer_cartoon_chaching.mp3")
