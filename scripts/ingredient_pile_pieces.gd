@@ -78,7 +78,7 @@ func _process(delta: float) -> void:
  if not visible:return
  var inverse=get_global_transform_with_canvas().affine_inverse()
  bin_center=inverse*game.camera.unproject_position(fill.global_position)
- pile_center=bin_center+Vector2(0,5)
+ pile_center=bin_center+Vector2(0,0 if ingredient in ["tomato","cheese"] else 5)
  bin_polygon.clear()
  # Use the actual rim, not the lowered fill plane: a low-stock plane can
  # project through the front wall even though it is inside the 3D container.
@@ -139,7 +139,7 @@ func _draw() -> void:
   "onion":
    piece_scale=.4752;brightness=.62
   "pickle":
-   piece_scale=.432;brightness=.532
+   piece_scale=.4752;brightness=.532
   "bacon":
    piece_scale=.5184;brightness=.267444;max_count=2
  var small:=topper_size*piece_scale
