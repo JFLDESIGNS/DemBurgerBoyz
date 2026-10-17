@@ -50,7 +50,7 @@ void fragment(){
   mat.set_shader_parameter("lift",.045)
  elif ingredient=="tomato":
   mat.set_shader_parameter("contrast",.68)
-  mat.set_shader_parameter("saturation",1.5)
+  mat.set_shader_parameter("saturation",1.05)
   mat.set_shader_parameter("preserve_chroma",true)
  elif ingredient=="pickle":
   mat.set_shader_parameter("contrast",.72)
