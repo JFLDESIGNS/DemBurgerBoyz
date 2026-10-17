@@ -216,7 +216,7 @@ func _begin_trip(idx: int, door: String, departing: bool, from: Vector3, to: Vec
 func _open_trip_door() -> void:
  _trip.opened=true
  var door: String=_trip.door
- _game.bg_people[int(_trip.index)].visible=true
+ _game.bg_people[int(_trip.index)].visible=not bool(_trip.departing) or door == "market"
  open_door(door)
  _shop_sound_serial += 1
  _shop_sound_door = door
@@ -253,7 +253,12 @@ func tick_building_traffic(delta: float) -> void:
    _indoor_life.cue_door(str(_trip.door),smoothstep(0.0,0.35,total)*(1.0-smoothstep(lead-.3,lead,total)))
   if total < lead: return
   if not bool(_trip.opened): _open_trip_door()
-  var elapsed := total-lead
+  if bool(_trip.departing) and str(_trip.door) != "market" and not _trip.has("move_start"):
+   # Hold the person behind the door until the opening animation actually finishes.
+   if door_animations.is_playing(): return
+   _trip.move_start=total
+   walker.visible=true
+  var elapsed := total-float(_trip.get("move_start",lead))
   var u := clampf(elapsed / 1.15, 0.0, 1.0)
   var travel := u
   var start: Vector3 = _trip["from"]

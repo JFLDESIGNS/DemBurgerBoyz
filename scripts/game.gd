@@ -66144,7 +66144,7 @@ func _build_ingredient_legend() -> void:
 
 		var icon := TextureRect.new()
 		icon.name = "StripIcon"
-		icon.texture = FoodSpritesScript.tray_cheese_tex() if id == "cheese" else (load("res://assets/ingredients/pickle_topper.png") if id == "pickle" else FoodSpritesScript.get_tex(id))
+		icon.texture = FoodSpritesScript.tray_cheese_tex() if id == "cheese" else FoodSpritesScript.get_tex(id)
 		icon.custom_minimum_size = Vector2(ingredient_icon_w, ingredient_icon_h)
 		icon.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER

@@ -270,6 +270,9 @@ static func prep_ingredients_tex() -> Texture2D:
 
 
 static func _try_load_ingredient(id: String) -> Texture2D:
+	# One approved pickle texture for the strip, drag ghost and burger layers.
+	if id == "pickle":
+		return load("res://assets/ingredients/pickle_topper.png") as Texture2D
 	## Load sliced sheet art when available (transparent PNG).
 	match id:
 		"bun_top", "bun_bottom", "patty", "cheese", "lettuce", "tomato", "onion", "bacon", "pickle", "ketchup", "mustard", "cutting_board":
