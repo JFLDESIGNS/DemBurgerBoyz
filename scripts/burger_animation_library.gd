@@ -18,6 +18,8 @@ static var _prop_boxes: Dictionary = {}
 static func fitted_library() -> AnimationLibrary:
 	if _fitted_library != null: return _fitted_library
 	_fitted_library = LIBRARY.duplicate(false) as AnimationLibrary
+	var service_library: AnimationLibrary=load("res://assets/characters/Animations/CustomerService.res")
+	for clip in service_library.get_animation_list(): _fitted_library.add_animation(clip,service_library.get_animation(clip))
 	var pet_library: AnimationLibrary=load("res://assets/characters/Animations/CatPet.res")
 	for clip in pet_library.get_animation_list(): _fitted_library.add_animation(clip,pet_library.get_animation(clip))
 	var hit_library: AnimationLibrary=load("res://assets/characters/Animations/TruckHit.res")
@@ -79,7 +81,7 @@ static func attach(player: AnimationPlayer, model: Node) -> Node3D:
 			"watch":
 				_box(group,Vector3.ZERO,Vector3(.18,.11,.055),Color("162c35"))
 				_box(group,Vector3(0,-.005,.035),Vector3(.115,.10,.025),Color("edab28"))
-			"card":_box(group,Vector3.ZERO,Vector3(.22,.035,.14),Color("edab28"))
+			"card":_box(group,Vector3.ZERO,Vector3(.32,.018,.15),Color("91b984"))
 			"napkin":_box(group,Vector3.ZERO,Vector3(.32,.025,.34),Color("f4f0de"))
 	props.visible = false
 	return props
@@ -121,13 +123,15 @@ static func _oval(parent: Node3D, position: Vector3, size: Vector3, color: Color
 static func update_customer_props(player: AnimationPlayer, props: Node3D) -> void:
 	if not is_instance_valid(player) or not is_instance_valid(props): return
 	var clip := String(player.current_animation).trim_prefix("burger/")
-	var kind := "phone" if clip.begins_with("Phone_") else ("watch" if clip == "Check_Watch" else "")
+	var kind := "phone" if clip.begins_with("Phone_") or clip == "Grisaldi_Photos" else ("card" if clip in ["Give_Money","Grisaldi_Spin_Throw"] else ("watch" if clip == "Check_Watch" else ""))
 	props.visible = kind != ""
 	for child in props.get_children(): child.visible = child.name == kind
-	if kind == "" or not LIBRARY.has_animation(clip): return
+	if kind == "" or not fitted_library().has_animation(clip): return
+	if kind == "card" and player.current_animation_position >= (1.95 if clip == "Grisaldi_Spin_Throw" else .85):
+		props.hide();return
 	# Apply the authored prop transform explicitly; imported animation mixers can
 	# omit non-bone tracks when the model was initialized before its props existed.
-	var animation := LIBRARY.get_animation(clip)
+	var animation := fitted_library().get_animation(clip)
 	var time := player.current_animation_position
 	for track in animation.get_track_count():
 		if not String(animation.track_get_path(track)).ends_with("/BurgerMotionProps"): continue

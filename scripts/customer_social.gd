@@ -3,6 +3,7 @@ extends Node
 var game: Node
 var encounter_left := 5.0
 var recent_chats: Array[int] = []
+var player_chat_left := 14.0
 var cat_left := 5.0
 var walker_left := 35.0
 var couples: Array = []
@@ -133,6 +134,12 @@ func _process(delta: float) -> void:
 	cat_left -= delta
 	walker_left -= delta
 	var waiting = game.customers.filter(eligible)
+	player_chat_left -= delta
+	if player_chat_left <= 0.0:
+		player_chat_left=randf_range(22.0,38.0)
+		if not waiting.is_empty():
+			var person=waiting[0]
+			speak_line(person,["Hey chef, how is your day going?", "You make this look easy!", "That smells amazing from here.", "Hope you get a lunch break too!", "Your cat is excellent company.", "This is becoming my usual lunch spot."].pick_random())
 	if encounter_left <= 0.0:
 		encounter_left = randf_range(7.6, 9.0)
 		if waiting.size() >= 2:

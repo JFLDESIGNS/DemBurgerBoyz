@@ -31305,7 +31305,7 @@ func _start_background_person(idx: int, as_partner: bool = false) -> void:
 	walker.set_meta("crowd_home_z", _bg_people_z() + (BG_PEOPLE_PAIR_Z if as_partner else 0.0))
 	var preset: Dictionary = CustomerScript.take_next_saved_character_preset()
 	if not preset.is_empty() and not as_partner and _grisaldi_arrival_due() and not _grisaldi_visits.has("%s:%d" % [current_location_id,day]):
-		preset.merge({"grisaldi":true,"top_color":"ffffffff","shoe_color":"e52d35ff","top_style":16,"top_catalog_version":1,"bottom_style":2,"bottom_catalog_version":1,"bottom_color":"244b32ff","hat_style":7,"hat_color":"ed2736ff","hair_style":18,"hair_scale":1.3,"hair_scale_xyz":[1,1,1],"hair_offset":[0,.54,0],"extra_hairs":[],"hair_color":"37291fff","facial_hair_style":2,"facial_hair_color":"37291fff","customer_voice":"male","glasses_style":0,"jewelry_style":0,"makeup_style":0,"shirt_graphic":0,"shoe_style":3,"hat_scale":1.0,"hat_offset":[0,.06,0],"hat_rotation":[0,0,0]},true)
+		preset.merge({"grisaldi":true,"top_color":"ffffffff","shoe_color":"e52d35ff","top_style":16,"top_catalog_version":1,"bottom_style":2,"bottom_catalog_version":1,"bottom_color":"244b32ff","hat_style":7,"hat_color":"ed2736ff","hair_style":18,"hair_scale":1.3,"hair_scale_xyz":[1,1,1],"hair_offset":[0,.62,0],"extra_hairs":[],"hair_color":"37291fff","facial_hair_style":2,"facial_hair_color":"37291fff","customer_voice":"male","glasses_style":0,"jewelry_style":0,"makeup_style":0,"shirt_graphic":0,"shoe_style":3,"hat_scale":1.0,"hat_offset":[0,.06,0],"hat_rotation":[0,0,0]},true)
 	if preset.is_empty():
 		bg_people_wait[idx] = 4.0
 		return
@@ -31725,7 +31725,10 @@ func mp_background_person_join(idx: int, nid: int, order: Array, preset: Diction
 	_spawn_customer_local(order,Color.WHITE,patience,lane,nid,-1,0,false,-1,false,preset,true)
 	var recruited = _customer_by_net_id(nid)
 	if is_instance_valid(recruited):
-		if bool(walker.get_meta("grisaldi",false)):_style_grisaldi(recruited,true)
+		if bool(walker.get_meta("grisaldi",false)):
+			_style_grisaldi(recruited,true)
+			if not mp_enabled or NetManager.is_host():
+				for fan in 5:_spawn_customer(true)
 		recruited.set_meta("recruited_running",true)
 		recruited.play_street_run(1.25)
 
@@ -63589,13 +63592,13 @@ func _on_challenge_customer_left(customer: Node3D, angry: bool) -> void:
 		_fail_challenge()
 
 
-func _spawn_customer() -> void:
+func _spawn_customer(grisaldi_referral: bool = false) -> void:
 	var spawn_began := _perf_hot_begin()
-	if _maybe_begin_bts_day1_performance():
+	if not grisaldi_referral and _maybe_begin_bts_day1_performance():
 		return
-	if _bts_day1_flow_enabled() and not _bts_day1_performance_done and _bts_day1_sequence_complete():
+	if not grisaldi_referral and _bts_day1_flow_enabled() and not _bts_day1_performance_done and _bts_day1_sequence_complete():
 		return
-	var skin_idx := _next_bts_day1_skin_idx()
+	var skin_idx := -1 if grisaldi_referral else _next_bts_day1_skin_idx()
 	var is_bts_guest := skin_idx >= 0
 	var order: Array[String] = _everything_burger_order() if is_bts_guest else GameDataScript.generate_order(
 		difficulty, _owns_soda_machine(), _owns_icecream_machine(), _owns_fryer_machine()
@@ -63605,7 +63608,7 @@ func _spawn_customer() -> void:
 	var patience_base := float(location_stats.get("patience_base", 92.0))
 	var patience_jitter := float(location_stats.get("patience_jitter", 6.0))
 	var patience := patience_base + randf_range(-patience_jitter, patience_jitter)
-	var lane := clampi(_waiting_customer_count(), 0, CustomerScript.LANE_X.size() - 1)
+	var lane := _waiting_customer_count() if grisaldi_referral else clampi(_waiting_customer_count(), 0, CustomerScript.LANE_X.size() - 1)
 	if not is_bts_guest:
 		skin_idx = _next_customer_skin_idx()
 	var face_style := 0 if is_bts_guest else randi() % 3
@@ -63619,6 +63622,7 @@ func _spawn_customer() -> void:
 	var custom_preset: Dictionary = {}
 	if not is_bts_guest:
 		custom_preset = CustomerScript.take_next_saved_character_preset()
+		if grisaldi_referral:custom_preset["grisaldi_referral"]=true
 	if mp_enabled:
 		if not NetManager.is_host() and not _mp_applying:
 			return
@@ -63657,6 +63661,7 @@ func _spawn_customer_local(
 		typed_order.append(str(o))
 	var c = CustomerScript.new()
 	c.setup(typed_order, color, patience, lane, skin_idx, face_style, jin_fact_idx, custom_preset, lock_custom_choice)
+	c.set_meta("grisaldi_referral",bool(custom_preset.get("grisaldi_referral",false)))
 	if challenge_guest or _challenge_attach_next:
 		c.is_challenge_guest = true
 		c.patience_max = 99999.0
@@ -63673,7 +63678,7 @@ func _spawn_customer_local(
 	if mp_enabled and not NetManager.is_host():
 		c.mp_host_driven = true
 	## Stand on the sidewalk — raised so more torso shows in the window.
-	c.position = Vector3(-6.5, CustomerScript.STAND_Y, 2.25)
+	c.position = Vector3(minf(-6.5,-6.5-lane*1.1) if bool(custom_preset.get("grisaldi_referral",false)) else -6.5, CustomerScript.STAND_Y, 2.25)
 	c.target_x = _customer_arrival_target_x(lane)
 	## Face along the sidewalk (+X) while walking in; they turn to the truck on arrival.
 	c.rotation_degrees = Vector3(0, CustomerScript.WALK_PLUS_X_YAW, 0)
@@ -72454,6 +72459,7 @@ func _complete_serve(
 		if deferred_review.is_empty():deferred_review={"stars":1.0,"kind":"wrong","tip":0,"force":true,"pic":cached_review_pic}
 		cust.set_meta("grisaldi_photo_pending",true)
 		cust.set_meta("grisaldi_meal_review_ready",true)
+	cust.set_meta("cash_sequence_pending",true)
 	cust.set_meta("meal_stars", float(deferred_review.get("stars", 0.0)))
 	if payout <= 0 and not guest_mp: _record_order_history(0,0,_order_food_cost(cust),cust)
 	if cached_review_pic != null:
@@ -72510,6 +72516,10 @@ func _finish_serve_deferred(station_index: int, customer: Node3D, review: Dictio
 		if mp_enabled and NetManager.is_online():mp_grisaldi_photos.rpc(_customer_net_id(customer))
 		await _grisaldi_take_photos(customer)
 		if is_instance_valid(customer):customer.set_meta("grisaldi_photo_pending",false)
+	if is_instance_valid(customer) and (not mp_enabled or NetManager.is_host()):
+		if mp_enabled and NetManager.is_online():mp_customer_cash.rpc(_customer_net_id(customer),_is_grisaldi_guest(customer))
+		await preload("res://scripts/customer_cash_sequence.gd").play(self,customer,_is_grisaldi_guest(customer))
+		if is_instance_valid(customer):customer.set_meta("cash_sequence_pending",false)
 	if customer != null and is_instance_valid(customer) and customer.has_method("release_serve_completion"):
 		var release_began := _perf_hot_begin()
 		customer.release_serve_completion()
@@ -81746,9 +81756,9 @@ func _grisaldi_take_photos(customer: Node3D) -> void:
 	var processing:=customer.is_processing()
 	customer.set_process(false)
 	customer._anim_player.stop();customer._anim_player.clear_caches()
-	customer._play_burger_clip("Phone_Two_Hands")
+	customer._play_burger_clip("Grisaldi_Photos")
 	for shot in 3:
-		await get_tree().create_timer(.7).timeout
+		await get_tree().create_timer(1.35).timeout
 		if not is_instance_valid(customer):return
 		var flash:=OmniLight3D.new();flash.omni_range=1.5;flash.light_energy=2.0
 		customer.add_child(flash);flash.position=Vector3(0,1.5,.35)
@@ -81757,6 +81767,7 @@ func _grisaldi_take_photos(customer: Node3D) -> void:
 	if not is_instance_valid(customer):return
 	customer._anim_player.stop();customer._anim_player.clear_caches()
 	customer._anim_state="";customer._play_anim("idle");customer.set_process(processing)
+	preload("res://scripts/customer_cash_sequence.gd").story(self,customer)
 
 func _spawn_scheduled_customer() -> void:
 	var before_count := customers.size()
@@ -81794,3 +81805,11 @@ func _grisaldi_arrival_due() -> bool:
 	if not _grisaldi_arrival_times.has(day):
 		_grisaldi_arrival_times[day] = randf_range(195.0,270.0)
 	return _shift_length()-day_time >= float(_grisaldi_arrival_times[day])
+
+
+@rpc("authority","call_remote","reliable")
+func mp_customer_cash(nid: int, special: bool) -> void:
+	var customer=_customer_by_net_id(nid)
+	if is_instance_valid(customer):
+		await preload("res://scripts/customer_cash_sequence.gd").play(self,customer,special)
+		if is_instance_valid(customer):customer.set_meta("cash_sequence_pending",false)

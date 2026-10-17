@@ -23,5 +23,13 @@ func run():
  await create_timer(1.2).timeout
  await RenderingServer.frame_post_draw
  get_root().get_texture().get_image().save_png("res://output/grisaldi_phone.png")
- await create_timer(1.2).timeout
+ await create_timer(3.8).timeout
+ for special in [false,true]:
+  preload("res://scripts/customer_cash_sequence.gd").play(game,actor,special)
+  await create_timer(.7).timeout
+  assert(actor._burger_props.visible,"Payment cash must be visible before release")
+  await RenderingServer.frame_post_draw
+  get_root().get_texture().get_image().save_png("res://output/grisaldi_cash_%s.png" % special)
+  await create_timer(2.0).timeout
+  assert(not actor.get_meta("cash_sequence_playing",false))
  print("GRISALDI_VISUAL_OK");quit()

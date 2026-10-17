@@ -18,8 +18,12 @@ func setup(owner_game: Node,person: Node3D,origin: Vector3) -> void:
  actor._eating=false;actor._burger_eat_phase="";actor._cat_pet_left=0.0
  actor.global_position=home
  # The camera faces +Z: negative X is screen right. Route around the queue.
- contact=Vector3(-1.55,actor.STAND_Y,1.20 + 0.6096) # Two feet farther from the truck.
- route.assign([Vector3(-9.2,home.y,home.z),Vector3(-9.2,actor.STAND_Y,actor.WAIT_Z),Vector3(contact.x,actor.STAND_Y,actor.WAIT_Z),contact])
+ contact=Vector3(.4192,actor.STAND_Y,2.45)
+ if is_instance_valid(game._grubbah) and is_instance_valid(game._grubbah.ledge):contact.x=game._grubbah.ledge.global_position.x
+ var behind_z: float=actor.WAIT_Z+1.65
+ # Cross behind every waiting customer, then approach on the left of the queue.
+ var bypass_x: float=maxf(contact.x+1.1,1.6)
+ route.assign([Vector3(-13.5,home.y,home.z),Vector3(-13.5,actor.STAND_Y,behind_z),Vector3(bypass_x,actor.STAND_Y,behind_z),Vector3(bypass_x,actor.STAND_Y,contact.z),contact])
  if not actor._anim_player.has_animation("burger/Truck_Smack"):
   actor._burger_props=preload("res://scripts/burger_animation_library.gd").attach(actor._anim_player,actor._anim_player.get_parent())
  actor.play_street_rejection(true)
@@ -56,7 +60,7 @@ func _process(delta: float) -> void:
   if age>=1.4:
    phase="escape";route_index=0
    # Leave along the foreground lane to screen right, never toward storefronts.
-   route.assign([Vector3(-10.5,actor.STAND_Y,contact.z)])
+   route.assign([Vector3(contact.x,actor.STAND_Y,actor.WAIT_Z+1.65),Vector3(-13.5,actor.STAND_Y,actor.WAIT_Z+1.65)])
    actor._anim_player.stop();actor._anim_player.clear_caches()
    actor.play_street_run(1.3)
 func finish() -> void:

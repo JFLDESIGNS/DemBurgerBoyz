@@ -14,9 +14,10 @@ func run():
  assert(actor.get_meta("street_hail")=="join_exit")
  g._update_background_hail(0,20)
  g._update_background_hail(0,.1)
- assert(g.customers.size()==1)
+ assert(g.customers.size()==6)
  assert(g.customers[0].get_custom_character_preset().top_style==16)
  assert(g.customers[0].get_customer_voice()=="male")
+ for fan in g.customers.slice(1):assert(fan.get_meta("grisaldi_referral",false))
  var customer=g.customers[0]
  assert(g.money==0,"Clicking Grisaldi must not give money before a burger")
  var balance: float=g.money
@@ -41,6 +42,6 @@ func run():
  for referral in g.customers.slice(before_rush):assert(referral.get_meta("grisaldi_referral",false))
  g._commit_social_review(4.0,"good",0,-1,g.customers.back())
  assert("Grisaldi" in g.social_reviews[0].text)
- print("GRISALDI_RECRUIT_OK: no click money, 4-star threshold, one $500 tip, photo sequence, exactly eight additional arrivals")
+ print("GRISALDI_RECRUIT_OK: five immediate followers, no click money, 4-star threshold, one $500 tip, photo sequence, exactly eight additional arrivals")
  g.queue_free();await process_frame
  quit()

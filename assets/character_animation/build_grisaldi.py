@@ -46,17 +46,23 @@ points=[]
 for i in range(24):
  angle=math.tau*i/24
  front=max(0,-math.sin(angle))
- points.append(Vector((.33*math.cos(angle),.29*math.sin(angle)-.16*front,2.48-.28*front)))
+ points.append(Vector((.30*math.cos(angle),.25*math.sin(angle)-.12*front,2.60-.23*front)))
 verts=[];faces=[]
 for i,point in enumerate(points):
  tangent=(points[(i+1)%24]-points[(i-1)%24]).normalized()
  side=tangent.cross(Vector((0,0,1))).normalized()
  up=tangent.cross(side).normalized()
- for j in range(4):
-  angle=math.tau*j/4
-  verts.append(point+.032*(math.cos(angle)*side+math.sin(angle)*up))
-for i in range(24):
- for j in range(4):faces.append((i*4+j,((i+1)%24)*4+j,((i+1)%24)*4+(j+1)%4,i*4+(j+1)%4))
+ across=up if i%2 else (up+side).normalized()
+ normal=tangent.cross(across).normalized()
+ base=len(verts)
+ for j in range(12):
+  a=math.tau*j/12
+  center=point+tangent*.052*math.cos(a)+across*.034*math.sin(a)
+  radial=(tangent*math.cos(a)+across*math.sin(a)).normalized()
+  for k in range(6):
+   angle=math.tau*k/6;verts.append(center+.012*(radial*math.cos(angle)+normal*math.sin(angle)))
+ for j in range(12):
+  for k in range(6):faces.append(tuple(base+v for v in [j*6+k,((j+1)%12)*6+k,((j+1)%12)*6+(k+1)%6,j*6+(k+1)%6]))
 data=bpy.data.meshes.new('Closed low poly necklace');data.from_pydata(verts,[],faces);data.materials.append(gold)
 obj=bpy.data.objects.new('Grisaldi gold necklace',data);bpy.context.collection.objects.link(obj)
 obj.vertex_groups.new(name='Chest').add(list(range(len(verts))),1,'REPLACE');parts.append(obj)
@@ -74,9 +80,9 @@ bpy.ops.import_scene.gltf(filepath=str(R/'assets/characters/modular_runtime/modu
 for obj in bpy.context.scene.objects:
  if obj.type!='MESH':continue
  for v in obj.data.vertices:
-  if v.co.z>.36:
-   t=min(1,(v.co.z-.36)/.32)
-   v.co.x*=1-.36*t;v.co.y*=1-.36*t
-   v.co.z=.20+(v.co.z-.36)*.28
-  elif v.co.z<.0:v.co.z*=.7
+  if v.co.z>.10:
+   t=min(1,(v.co.z-.10)/.48)
+   v.co.x*=1-.55*t;v.co.y*=1-.55*t
+   v.co.z=.10+(v.co.z-.10)*.20
+  elif v.co.z<.0:v.co.z*=.66
 bpy.ops.export_scene.gltf(filepath=str(R/'assets/characters/modular_runtime/modules/hair/sculpted/grisaldi_hat_fit.glb'),export_format='GLB',export_animations=False)

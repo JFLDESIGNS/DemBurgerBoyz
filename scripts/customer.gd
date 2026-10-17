@@ -1456,7 +1456,7 @@ func _play_burger_clip(clip: String) -> bool:
 	_anim_player.speed_scale = 1.0
 	_anim_player.play(path, 0.12)
 	# The served burger remains the real assembled stack in the gameplay UI.
-	if _burger_props != null:_burger_props.visible = clip.begins_with("Phone_") or clip == "Check_Watch"
+	if _burger_props != null:_burger_props.visible = clip.begins_with("Phone_") or clip in ["Check_Watch","Give_Money","Grisaldi_Photos","Grisaldi_Spin_Throw"]
 	return true
 
 
@@ -5049,7 +5049,7 @@ func receive_burger(
 
 
 func release_serve_completion() -> void:
-	if bool(get_meta("grisaldi_photo_pending",false)):return
+	if bool(get_meta("grisaldi_photo_pending",false)) or bool(get_meta("cash_sequence_pending",false)):return
 	if not bool(get_meta("serve_commit_hold", false)):
 		return
 	set_meta("serve_commit_hold", false)

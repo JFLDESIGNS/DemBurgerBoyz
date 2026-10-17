@@ -16,12 +16,12 @@ for side in ['Right','Left']:
   t=(frame-1)/72
   d=choreography('Idle_Forward',t)
   weight=smooth(t/.2)*(1-smooth((t-.78)/.22))
-  stroke=math.sin(max(0,t-.2)*math.pi*8)
+  stroke=math.sin(max(0,t-.2)*math.pi*6)
   hand='R' if side=='Right' else 'L'
   sign=-1 if side=='Right' else 1
-  d[hand]=Vector(d[hand]).lerp(Vector((sign*.98,-.57+stroke*.09,1.32+stroke*.045)),weight)
+  d[hand]=Vector(d[hand]).lerp(Vector((sign*.98,-.57+stroke*.13,1.32+stroke*.025)),weight)
   d[hand+'P']=[sign*1.15,.15,1.72]
-  d['spine']=[9*weight,0,sign*-6*weight]
+  d['spine']=[12*weight,0,sign*-6*weight]
   d['chest']=[7*weight,0,sign*-5*weight]
   d['head']=[16*weight,sign*12*weight,0]
   d['hand'+hand]=[0,-1,-.1]
