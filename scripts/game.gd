@@ -65170,11 +65170,13 @@ func _strip_icon_shader_code() -> String:
 shader_type canvas_item;
 uniform float brightness = 1.0;
 uniform float saturation = 1.0;
+varying vec4 item_modulate;
+void vertex() { item_modulate = COLOR; }
 void fragment() {
 	vec4 col = texture(TEXTURE, UV);
 	float gray = dot(col.rgb, vec3(0.299, 0.587, 0.114));
 	vec3 sat = mix(vec3(gray), col.rgb, saturation);
-	COLOR = vec4(sat * brightness, col.a);
+	COLOR = vec4(sat * brightness, col.a) * item_modulate;
 }
 """
 
@@ -65319,7 +65321,7 @@ func _set_ingredient_bin_hover(btn: Control, hovered: bool) -> void:
 		return
 	var icon := btn.get_node_or_null("Stack/IconMargin/StripIcon") as Control
 	if icon != null:
-		var previous = icon.get_meta("hover_bob", null)
+		var previous = icon.get_meta("hover_bob") if icon.has_meta("hover_bob") else null
 		if previous is Tween and previous.is_valid(): previous.kill()
 		if not icon.has_meta("hover_rest"): icon.set_meta("hover_rest", icon.position.y)
 		var rest: float = icon.get_meta("hover_rest")
@@ -66176,6 +66178,11 @@ func _build_ingredient_legend() -> void:
 		if _is_condiment(id):
 			icon.visible = false
 		icon_margin.add_child(icon)
+		if id in BIN_FILL_IDS:
+			var pieces = preload("res://scripts/ingredient_pile_pieces.gd").new()
+			pieces.setup(self,id,icon)
+			tbtn.add_child(pieces)
+			tbtn.move_child(pieces,0)
 
 		var spacer := Control.new()
 		spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
