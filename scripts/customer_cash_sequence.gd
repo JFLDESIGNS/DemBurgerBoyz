@@ -43,8 +43,11 @@ static func story(game: Node, customer: Node3D) -> void:
 	var tween := panel.create_tween();panel.modulate.a=0;tween.tween_property(panel,"modulate:a",1.0,.2);tween.tween_interval(4.5);tween.tween_property(panel,"modulate:a",0.0,.3);tween.tween_callback(layer.queue_free)
 
 
-static func fly_to_hud(game: Node, customer: Node3D, special: bool) -> void:
+static func fly_to_hud(game: Node, customer: Node3D, _special: bool) -> void:
 	customer.set_meta("cash_released",true)
+	var amount := float(customer.get_meta("cash_payment_amount",0))
+	if amount <= 0:return
+	var count := clampi(int(ceil(amount/4.0)),1,18)
 	if is_instance_valid(game.game_audio):game.game_audio.play_customer_cash_chaching()
 	var viewport: Viewport=game.get_viewport()
 	var camera: Camera3D=viewport.get_camera_3d()
@@ -53,21 +56,21 @@ static func fly_to_hud(game: Node, customer: Node3D, special: bool) -> void:
 	var start := camera.unproject_position(customer.global_position+Vector3(.2,1.5,0))
 	var target := viewport.get_visible_rect().size*Vector2(.92,.07)
 	if is_instance_valid(game.hud_money):target=game.hud_money.get_global_rect().get_center()
-	for i in (9 if special else 5):
+	for i in count:
 		var bill := TextureRect.new();bill.texture=game._make_tip_bill_texture()
-		bill.expand_mode=TextureRect.EXPAND_IGNORE_SIZE;bill.size=Vector2(76,38)
+		bill.expand_mode=TextureRect.EXPAND_IGNORE_SIZE;bill.size=Vector2(68,34)
 		bill.pivot_offset=bill.size*.5;bill.mouse_filter=Control.MOUSE_FILTER_IGNORE
 		layer.add_child(bill);bill.position=start-bill.pivot_offset;bill.modulate.a=0
-		var bend := start.lerp(target,.45)+Vector2((i-4)*24,-90)
-		var tween := bill.create_tween();tween.tween_interval(i*.045)
+		var bend := start.lerp(target,.45)+Vector2(sin(float(i)*2.4)*16,-110)
+		var tween := bill.create_tween();tween.tween_interval(i*.075)
 		tween.tween_callback(func():bill.modulate.a=1)
 		tween.tween_method(func(t: float):
 			bill.position=start.lerp(bend,t).lerp(bend.lerp(target,t),t)-bill.pivot_offset
-			bill.rotation=sin(t*TAU+i)*.3
+			bill.rotation=sin(t*TAU+i)*.18
 			bill.scale=Vector2.ONE*lerpf(1.0,.3,t)
 			bill.modulate.a=1.0-smoothstep(.8,1.0,t)
-		,0.0,1.0,.8)
-	var cleanup := layer.create_tween();cleanup.tween_interval(1.25)
+		,0.0,1.0,1.0)
+	var cleanup := layer.create_tween();cleanup.tween_interval(1.05+(count-1)*.075)
 	cleanup.tween_callback(func():
 		if is_instance_valid(game.hud_money):game._punch_hud_money()
 		layer.queue_free())
