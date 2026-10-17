@@ -134,15 +134,15 @@ func _draw() -> void:
   "cheese":
    piece_scale=.726;brightness=.3298;max_count=1;flatten=.92;angles=[-.03,0.0,0.0]
   "tomato":
-   piece_scale=.57024;brightness=.42687;max_count=2
+   piece_scale=.57024;brightness=.4012578;max_count=2
   "lettuce":
-   piece_scale=.4752;brightness=.414;max_count=2;angles=[-.23,.20,0.0]
+   piece_scale=.4752;brightness=.40158;max_count=2;angles=[-.23,.20,0.0]
   "onion":
-   piece_scale=.4752;brightness=.589
+   piece_scale=.4752;brightness=.55955
   "pickle":
-   piece_scale=.4752;brightness=.532
+   piece_scale=.4752;brightness=.5054
   "bacon":
-   piece_scale=.5184;brightness=.267444;max_count=2
+   piece_scale=.57024;brightness=.267444;max_count=2
  var small:=topper_size*piece_scale
  small.y*=flatten
  var offsets:=[Vector2(-small.x*.30,small.y*.1),Vector2(small.x*.30,small.y*.18),Vector2(0,-small.y*.18)]

@@ -3,6 +3,7 @@ var cat: Node3D
 var eyes: Array[ShaderMaterial] = []
 var idle_time := 0.0
 var leaving := false
+var meow_delay := 2.0
 var cinematic: Control
 var home := Vector3(-1.6, 5.4, -.8)
 func setup(owner_cinematic: Control) -> void:
@@ -33,6 +34,7 @@ func setup(owner_cinematic: Control) -> void:
 
 func reset_perch() -> void:
 	leaving = false
+	meow_delay = 2.0
 	position = home
 	cat.rotation.y = .65
 	var animation := cat.find_child("AnimationPlayer", true, false) as AnimationPlayer
@@ -46,7 +48,7 @@ func leave_before_truck() -> void:
 	leaving = true
 	var game := get_tree().current_scene
 	if game != null and is_instance_valid(game.get("game_audio")):
-		game.game_audio.play_cat_chirp()
+		game.game_audio.play_cat_meow(.55)
 		game.game_audio.play_spatula_whoosh()
 	var start := position
 	var exit := Vector3(10.5, 3.7, -4.0)
@@ -61,7 +63,13 @@ func leave_before_truck() -> void:
 	hide()
 
 func _process(delta: float) -> void:
-	if not is_instance_valid(cat) or not is_visible_in_tree() or leaving:return
+	if not is_instance_valid(cat) or not is_visible_in_tree() or leaving or not is_instance_valid(cinematic) or not cinematic.is_visible_in_tree():return
+	meow_delay -= delta
+	if meow_delay <= 0.0:
+		var game := get_tree().current_scene
+		if game != null and is_instance_valid(game.get("game_audio")) and not game.game_audio.cat_sounds_muted:
+			game.game_audio.play_cat_meow(.55)
+			meow_delay = randf_range(16.0,24.0)
 	idle_time += delta
 	cat.rotation.z = sin(idle_time * 1.6) * .025
 	cat.scale = Vector3(1.0 + sin(idle_time * 2.0) * .012, 1.0 - sin(idle_time * 2.0) * .012, 1.0) * 2.2

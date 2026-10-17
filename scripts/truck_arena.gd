@@ -22,6 +22,8 @@ func _input(event:InputEvent)->void:
   if event.physical_keycode==KEY_SPACE or event.keycode==KEY_SPACE:
    if hosting:simulation.jump_for(NetManager.my_id())
    else:game.mp_truck_arena_jump.rpc_id(1,generation)
+ if event is InputEventMouseButton and event.button_index==MOUSE_BUTTON_LEFT and event.pressed:
+  burst_queued=true
  if event is InputEventJoypadButton and event.pressed:
   if event.button_index==JOY_BUTTON_X:burst_queued=true
   if event.button_index==JOY_BUTTON_A:

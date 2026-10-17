@@ -441,7 +441,7 @@ func _build_menu_pals() -> void:
 		pal.name = "OpeningPal%d" % i
 		pal.set_meta("delivery_driver", true)
 		pal.is_street_pedestrian = true
-		pal.setup(["bun_bottom", "patty", "bun_top"] as Array[String], Color("EF9964") if i == 0 else Color("75D5BD"), 9999.0, 0, 1, -1, -1, {}, true)
+		pal.setup(["bun_bottom", "patty", "bun_top"] as Array[String], Color("EF9964") if i == 0 else Color("75D5BD"), 9999.0, 0, 1, -1, -1, pal.take_next_saved_character_preset(), true)
 		group.add_child(pal)
 		pal.set_process(false)
 		pal.set_physics_process(false)
@@ -468,9 +468,7 @@ func _menu_actor_shadow(parent: Node3D, at: Vector3, dimensions: Vector2) -> voi
 func _menu_pal_idle(pal: Node3D, index: int) -> void:
 	pal.set_process(false)
 	pal.set_physics_process(false)
-	if pal._anim_player != null and pal._anim_player.has_animation("kenney/Idle"):
-		pal._anim_player.play("kenney/Idle")
-		pal._anim_player.seek(index * .7, true)
+	pal._play_anim("idle")
 
 
 func _style_truck_details() -> void:
