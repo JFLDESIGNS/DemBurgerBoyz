@@ -13,6 +13,7 @@ var hazards: Dictionary = {}
 var next_id = 0
 var blast_count = 0
 var held_id = -1
+var pending_release_id = -1
 var drag_send_left = 0.0
 
 func setup(owner_boss: Node) -> void:
@@ -91,7 +92,7 @@ func advance(delta: float) -> void:
 
 func update_visual(h: Dictionary) -> void:
  var airborne=h.age<RELEASE+FLIGHT
- var held=int(h.holder)>0 or int(h.id)==held_id
+ var held=int(h.holder)>0 or int(h.id)==held_id or int(h.id)==pending_release_id
  h.ring.position=Vector3(h.target.x,game.GRILL_SURFACE_Y+.005,h.target.z)
  h.ring.visible=not held
  if held:
@@ -167,6 +168,7 @@ func remove_hazard(id: int) -> void:
  if not hazards.has(id):return
  var h=hazards[id];h.sizzle.stop();h.node.queue_free();h.ring.queue_free();hazards.erase(id)
  if held_id==id:held_id=-1
+ if pending_release_id==id:pending_release_id=-1
 
 func clear() -> void:
  for id in hazards.keys():remove_hazard(id)
@@ -188,7 +190,7 @@ func sync_hazards(rows: Array, round_id: int) -> void:
   if not hazards.has(id):spawn_local(row)
   else:
    for key in ["age","heat","start","target","holder"]:hazards[id][key]=row.get(key,0)
-   if id!=held_id:hazards[id].carry=row.get("carry",row.target)
+   if id!=held_id and id!=pending_release_id:hazards[id].carry=row.get("carry",row.target)
    if int(hazards[id].holder)>0 and int(hazards[id].holder)!=local_peer() and held_id==id:held_id=-1
  for id in hazards.keys():
   if not present.has(id):remove_hazard(id)
@@ -223,10 +225,18 @@ func handle_input(event: InputEvent) -> bool:
    if hazards.has(held_id):hazards[held_id].carry=pointer_world(event.position)
    return true
   if event is InputEventMouseButton and event.button_index==MOUSE_BUTTON_LEFT and not event.pressed:
-   var id=held_id;held_id=-1
-   send_command("trash" if game._is_over_garbage(event.position) else "drop",id,game._grill_plane_from_screen(event.position))
+   var id=held_id
+   var over_trash=game._garbage_area_hit(event.position) # Host validates capacity; guest fullness may be stale.
+   if hazards.has(id):
+    hazards[id].carry=pointer_world(event.position)
+    update_visual(hazards[id])
+   held_id=-1
+   if not boss.host():pending_release_id=id
+   var drop_pos=game._grill_plane_from_screen(game._gui_to_camera_screen(event.position))
+   send_command("trash" if over_trash else "drop",id,drop_pos)
    return true
   if event is InputEventMouseButton:return true
+ if pending_release_id>=0:return event is InputEventMouseButton
  if not event is InputEventMouseButton or event.button_index!=MOUSE_BUTTON_LEFT or not event.pressed:return false
  if game.options_menu_open or game.shift_paused or game._phone_owns_pointer(event.position) or game._ui_blocks_world_click(event.position):return false
  if game._hands_busy_with_other_tool() or is_instance_valid(game.spatula_patty) or is_instance_valid(game.dragging_patty):return false
@@ -255,7 +265,9 @@ func apply_command(kind: String, id: int, pos: Vector3, peer: int) -> void:
   if boss.online() and peer!=local_peer():claim_reply.rpc_id(peer,id,allowed,boss.generation)
   elif not allowed and held_id==id:held_id=-1
   broadcast();return
- if not hazards.has(id) or int(hazards[id].holder)!=peer:return
+ if not hazards.has(id) or int(hazards[id].holder)!=peer:
+  if kind in ["drop","trash"] and boss.online() and peer!=local_peer():release_reply.rpc_id(peer,id,boss.generation)
+  return
  var h=hazards[id]
  if kind=="move":
   h.carry=pos.clamp(Vector3(-4,game.GRILL_SURFACE_Y+.1,-3),Vector3(4,game.GRILL_SURFACE_Y+2,4))
@@ -267,11 +279,18 @@ func apply_command(kind: String, id: int, pos: Vector3, peer: int) -> void:
   h.holder=0
   if not game._grill_zone_at(pos).is_empty():
    h.target=Vector3(pos.x,game.GRILL_SURFACE_Y+.03,pos.z);h.ring.position=Vector3(pos.x,game.GRILL_SURFACE_Y+.005,pos.z)
+ if kind in ["drop","trash"] and boss.online() and peer!=local_peer():release_reply.rpc_id(peer,id,boss.generation)
  broadcast()
 
 @rpc("authority","call_remote","reliable")
+func release_reply(id: int, round_id: int) -> void:
+ if round_id==boss.generation and pending_release_id==id:pending_release_id=-1
+
+@rpc("authority","call_remote","reliable")
 func claim_reply(id: int, granted: bool, round_id: int) -> void:
- if round_id==boss.generation and not granted and held_id==id:held_id=-1
+ if round_id==boss.generation and not granted:
+  if held_id==id:held_id=-1
+  if pending_release_id==id:pending_release_id=-1
 
 @rpc("authority","call_remote","reliable")
 func receive_discard(id: int, round_id: int) -> void:
@@ -281,6 +300,7 @@ func discard_local(id: int) -> void:
  if not hazards.has(id):return
  var h=hazards[id];hazards.erase(id)
  if held_id==id:held_id=-1
+ if pending_release_id==id:pending_release_id=-1
  h.sizzle.stop();h.label.hide();h.ring.queue_free()
  var start:Vector3=h.node.global_position;var target:Vector3=game._garbage_lerp_target_world()
  var tween=h.node.create_tween()

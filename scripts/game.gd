@@ -3007,7 +3007,7 @@ const SHADOW_CATCHER_SHADER_PATH := "res://shaders/shadow_catcher.gdshader"
 const BG_PEOPLE_COUNT := 2
 const BG_PEOPLE_MAX_ONSCREEN := 2
 const BG_PEOPLE_Z := 8.65 ## Far sidewalk in front of the shops, behind street cars.
-const BG_PEOPLE_EDGE_X := 8.4
+const BG_PEOPLE_EDGE_X := 12.4
 const BG_PEOPLE_SPEED_MIN := 0.72
 const BG_PEOPLE_SPEED_MAX := 1.58
 const BG_PEOPLE_WAIT_MIN := 9.0
@@ -10372,8 +10372,9 @@ func _garbage_area_hit(screen_pos: Vector2) -> bool:
 		return false
 	if camera == null or physical_garbage_area == null or not is_instance_valid(physical_garbage_area):
 		return false
-	var from := camera.project_ray_origin(screen_pos)
-	var to := from + camera.project_ray_normal(screen_pos) * 100.0
+	var camera_screen := _gui_to_camera_screen(screen_pos)
+	var from := camera.project_ray_origin(camera_screen)
+	var to := from + camera.project_ray_normal(camera_screen) * 100.0
 	var query := PhysicsRayQueryParameters3D.create(from, to, PHYSICAL_GARBAGE_COLLISION_LAYER)
 	query.collide_with_areas = true
 	query.collide_with_bodies = false

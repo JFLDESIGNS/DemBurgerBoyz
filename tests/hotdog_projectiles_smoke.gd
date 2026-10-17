@@ -60,6 +60,16 @@ func run():
  hazards.receive_blast(200,pos,[9003],boss.generation)
  assert(not hazards.hazards.has(200) and synced.is_queued_for_deletion(),"Host explosion removes the same network burger on client")
  hazards.sync_hazards([{"id":201}],boss.generation-1);assert(hazards.hazards.is_empty(),"Old battle packets must be ignored")
+ hazards.sync_hazards([{"id":203,"age":2.0,"heat":.2,"start":pos,"target":pos,"round":boss.generation}],boss.generation)
+ var carried=pos+Vector3(.4,.3,0)
+ hazards.pending_release_id=203;hazards.hazards[203].carry=carried
+ hazards.sync_hazards([{"id":203,"age":2.1,"heat":.2,"start":pos,"target":pos,"carry":pos,"holder":0,"round":boss.generation}],boss.generation)
+ hazards.update_visual(hazards.hazards[203])
+ assert(hazards.hazards[203].node.global_position.is_equal_approx(carried),"Pending guest release must not snap to a stale grill snapshot")
+ hazards.release_reply(203,boss.generation-1)
+ assert(hazards.pending_release_id==203)
+ hazards.receive_discard(203,boss.generation)
+ assert(hazards.pending_release_id==-1 and not hazards.hazards.has(203))
  hazards.boss=boss
  hazards.spawn_local({"id":202,"age":0.0,"heat":0.0,"start":Vector3(0,3,7),"target":pos,"round":boss.generation})
  boss.cancel();assert(hazards.hazards.is_empty(),"Ending challenge clears all bombs")
