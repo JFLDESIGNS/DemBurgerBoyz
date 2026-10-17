@@ -175,7 +175,7 @@ func auto_lay_paper() -> void:
  if is_selected():set_phase("paper")
 func holds_customer_timers() -> bool:
  return is_selected() and str(state.get("phase","")) in ["accepted","paper","wrapping","bagging"]
-func bag_station_pos() -> Vector3:return board_pos()+Vector3(.12,.2944,.32)
+func bag_station_pos() -> Vector3:return board_pos()+Vector3(.0184,.2944,.32) # Four inches camera-right.
 func _process(delta: float) -> void:
  if not is_instance_valid(game):return
  if not game.playing:

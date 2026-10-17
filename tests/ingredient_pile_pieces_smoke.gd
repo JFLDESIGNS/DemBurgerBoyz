@@ -24,6 +24,15 @@ func run():
  assert(not pieces.visible and icon.self_modulate.a==0.0)
  g.supply_stock.tomato=4;pieces._process(.7)
  assert(pieces.visible and icon.self_modulate.a==1.0)
+ var cheese=g.ingredient_buttons.cheese.get_node("PilePieces")
+ cheese.set_process(false)
+ cheese.previous_stock=-1;cheese.previous_drag=false;cheese._process(.7)
+ g.cheese_held=true
+ cheese._process(.016)
+ assert(cheese.icon.self_modulate.a==0.0 and cheese.flight_age==0.0)
+ g.cheese_held=false
+ cheese._process(.7)
+ assert(cheese.icon.self_modulate.a==1.0)
  if DisplayServer.get_name()!="headless":
   await process_frame;await RenderingServer.frame_post_draw
   root.get_texture().get_image().save_png("res://output/ingredient_pile_pieces.png")

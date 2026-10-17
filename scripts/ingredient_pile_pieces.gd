@@ -25,6 +25,7 @@ shader_type canvas_item;
 uniform float contrast = 1.0;
 uniform float lift = 0.0;
 uniform float saturation = 1.0;
+uniform bool preserve_chroma = false;
 uniform vec3 tint = vec3(1.0);
 varying vec4 ink;
 void vertex(){ ink=COLOR; }
@@ -32,6 +33,11 @@ void fragment(){
  vec4 tex=texture(TEXTURE,UV);
  float weight=clamp((1.0-ink.r)/0.4,0.0,1.0);
  vec3 graded=clamp((tex.rgb-vec3(.5))*contrast+vec3(.5)+lift,vec3(0.0),vec3(1.0))*tint;
+ if(preserve_chroma){
+  float source_luma=dot(tex.rgb,vec3(.299,.587,.114));
+  float target_luma=clamp((source_luma-.5)*contrast+.5+lift,0.0,1.0);
+  graded=tex.rgb*(target_luma/max(source_luma,.015))*tint;
+ }
  float gray=dot(graded,vec3(.299,.587,.114));
  graded=clamp(mix(vec3(gray),graded,saturation),vec3(0.0),vec3(1.0));
  COLOR=vec4(mix(tex.rgb,graded,weight),tex.a)*ink;
@@ -44,9 +50,11 @@ void fragment(){
   mat.set_shader_parameter("lift",.045)
  elif ingredient=="tomato":
   mat.set_shader_parameter("contrast",.68)
-  mat.set_shader_parameter("saturation",1.25)
+  mat.set_shader_parameter("saturation",1.5)
+  mat.set_shader_parameter("preserve_chroma",true)
  elif ingredient=="pickle":
-  mat.set_shader_parameter("contrast",.82)
+  mat.set_shader_parameter("contrast",.72)
+  mat.set_shader_parameter("tint",Vector3(1.06,1.03,.82))
   mat.set_shader_parameter("lift",.08)
   mat.set_shader_parameter("saturation",1.08)
  elif ingredient=="cheese":
@@ -58,7 +66,7 @@ func _process(delta: float) -> void:
  since_take+=delta
  flight_age=minf(DURATION,flight_age+delta)
  stock=int(game.supply_stock.get(ingredient,0))
- var dragging:bool=game._pending_ingredient_drag==ingredient or (ingredient=="cheese" and game._pending_cheese_drag)
+ var dragging:bool=game._pending_ingredient_drag==ingredient or (ingredient=="cheese" and (game._pending_cheese_drag or game.cheese_held))
  var taken:bool=(dragging and not previous_drag) or (previous_stock>=0 and stock<previous_stock and since_take>DURATION)
  if taken and stock>0:
   flight_age=0.0;since_take=0.0
@@ -74,11 +82,18 @@ func _process(delta: float) -> void:
  bin_polygon.clear()
  # Use the actual rim, not the lowered fill plane: a low-stock plane can
  # project through the front wall even though it is inside the 3D container.
- var half:=maxf(.1,float(game.ingredient_bin_length)-2.0*float(game.ingredient_bin_wall))*.43
- for corner in [Vector2(-half,-half),Vector2(half,-half),Vector2(half,half),Vector2(-half,half)]:
-  bin_polygon.append(inverse*game.camera.unproject_position(tub.to_global(Vector3(corner.x,0,corner.y))))
+ var width:=maxf(.4,float(game.ingredient_bin_length))
+ var wall:=clampf(float(game.ingredient_bin_wall),.03,width*.35)
+ var radius:=clampf(float(game.ingredient_bin_radius),.04,width*.45)
+ var half:float=(width-2.0*wall)*.5-.006
+ var inner_radius:=maxf(.04,radius-wall)
+ # Match the rounded cavity used by _make_ingredient_tub_3d, at the actual rim.
+ for i in 48:
+  var corner:Vector3=game._garbage_liner_rim_point(i,48,half,half,inner_radius)
+  bin_polygon.append(inverse*game.camera.unproject_position(tub.to_global(corner)))
+
  bin_center=Vector2.ZERO
- for point in bin_polygon:bin_center+=point*.25
+ for point in bin_polygon:bin_center+=point/float(bin_polygon.size())
 
  topper_center=inverse*(icon.get_global_transform_with_canvas()* (icon.size*.5))
  var texture_size:Vector2=icon.texture.get_size()
@@ -87,7 +102,7 @@ func _process(delta: float) -> void:
 
 func _stamp(center:Vector2,dimensions:Vector2,angle:float,color:Color,clip:bool) -> void:
  var transform:=Transform2D(angle,center)
- if not clip or bin_polygon.size()!=4:
+ if not clip or bin_polygon.size()<3:
   draw_set_transform(center,angle)
   draw_texture_rect(icon.texture,Rect2(-dimensions*.5,dimensions),false,color)
   draw_set_transform(Vector2.ZERO)
