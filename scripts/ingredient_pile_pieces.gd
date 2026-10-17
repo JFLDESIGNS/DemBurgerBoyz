@@ -58,15 +58,17 @@ func _draw() -> void:
  var angles:=[-.13,.12,0.0]
  match ingredient:
   "cheese":
-   piece_scale=.605;brightness=.414;max_count=1;flatten=.92;angles=[-.03,0.0,0.0]
+   piece_scale=.605;brightness=.34;max_count=1;flatten=.92;angles=[-.03,0.0,0.0]
   "tomato":
-   piece_scale=.432;brightness=.506;max_count=2
+   piece_scale=.4752;brightness=.62;max_count=2
   "lettuce":
-   piece_scale=.432;max_count=2;angles=[-.23,.20,0.0]
+   piece_scale=.4752;brightness=.414;max_count=2;angles=[-.23,.20,0.0]
   "onion":
-   piece_scale=.432;brightness=.506
+   piece_scale=.4752;brightness=.62
+  "pickle":
+   piece_scale=.432;brightness=.56
   "bacon":
-   piece_scale=.432;brightness=.414;max_count=2
+   piece_scale=.5184;brightness=.3519;max_count=2
  var small:=topper_size*piece_scale
  small.y*=flatten
  var offsets:=[Vector2(-small.x*.30,small.y*.1),Vector2(small.x*.30,small.y*.18),Vector2(0,-small.y*.18)]
