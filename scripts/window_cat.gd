@@ -47,8 +47,8 @@ const RUN_SEC := 1.35
 const AFTER_BURGER_HIDE_SEC := 95.0
 const DELIVERY_TURN_SEC := 0.45
 const BAG_CHASE_SEC := 0.68
-const BAG_SNATCH_SEC := 0.20
-const BAG_RUN_SEC := 1.70
+const BAG_SNATCH_SEC := 0.34
+const BAG_RUN_SEC := 2.10
 
 signal fed(kind: String)
 signal petted
@@ -971,10 +971,12 @@ func _snatch_garbage_bag() -> void:
 	if _carried_bag.get_parent() != self:
 		_carried_bag.reparent(self, true)
 	var mag := (absf(_carried_bag.scale.x) + absf(_carried_bag.scale.y) + absf(_carried_bag.scale.z)) / 3.0
-	_carried_bag_base_scale = clampf(mag * 0.92, 1.6, 5.5)
-	_carried_bag.scale = Vector3.ONE * _carried_bag_base_scale
-	_carried_bag.position = Vector3(0.06, 0.20, 0.40)
-	_carried_bag.rotation_degrees = Vector3(-32.0, 22.0, 58.0)
+	_carried_bag_base_scale = clampf(mag * 0.92, 0.5, 5.5)
+	var pickup := create_tween().set_parallel(true)
+	pickup.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	pickup.tween_property(_carried_bag, "scale", Vector3.ONE * _carried_bag_base_scale, .28)
+	pickup.tween_property(_carried_bag, "position", Vector3(.06,.20,.40), .28)
+	pickup.tween_property(_carried_bag, "rotation_degrees", Vector3(-32,22,58), .28)
 	_carried_bag.visible = true
 	_burst_hearts()
 	_pet_squash = 0.85
@@ -984,11 +986,15 @@ func _begin_bag_run_away() -> void:
 	_state = "running"
 	_timer = BAG_RUN_SEC
 	_run_from = position
-	_run_to = Vector3(
-		position.x + 2.8 + _giant * 0.6,
-		_hidden_y() + 0.14,
-		position.z + 3.5 + _giant * 0.45
-	)
+	# Project an off-screen left destination at the same depth; never sink or fade mid-run.
+	var cam := get_viewport().get_camera_3d()
+	_run_to = position + Vector3(18.0,0.0,0.0)
+	if cam != null:
+		var screen := cam.unproject_position(global_position)
+		var depth := -cam.to_local(global_position).z
+		var destination := cam.project_position(Vector2(-600.0,screen.y), depth)
+		_run_to = get_parent().to_local(destination)
+		_run_to.y = position.y
 	_run_yaw_from = rotation_degrees.y
 	_run_yaw_to = _yaw_look(_run_from, _run_to)
 	if _anim != null:
@@ -998,11 +1004,11 @@ func _begin_bag_run_away() -> void:
 func _jiggle_carried_bag() -> void:
 	if _carried_bag == null or not is_instance_valid(_carried_bag):
 		return
-	if _carried_bag.get_parent() != self:
+	if _carried_bag.get_parent() != self or _state != "running":
 		return
 	## Vertical squash and stretch while running — no wobble spin.
 	var bounce := absf(sin(_bob * 12.0))
-	var stretch := bounce * 0.22
+	var stretch := bounce * 0.06
 	var sy := _carried_bag_base_scale * (1.0 + stretch)
 	var sxz := _carried_bag_base_scale * (1.0 - stretch * 0.38)
 	_carried_bag.scale = Vector3(sxz, sy, sxz)

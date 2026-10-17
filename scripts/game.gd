@@ -9825,6 +9825,7 @@ render_mode diffuse_burley, specular_schlick_ggx, cull_disabled;
 uniform vec4 albedo : source_color = vec4(0.09, 0.09, 0.10, 1.0);
 uniform float roughness = 0.9;
 uniform float metallic = 0.02;
+uniform vec2 liner_bounds = vec2(1.0);
 uniform float wobble_amp = 0.14;
 uniform float wobble_freq = 3.2;
 uniform float wobble_speed = 0.0;
@@ -9845,6 +9846,7 @@ void vertex() {
 		(n2 + n3) * 0.55 * mag * wobble_y,
 		(n2 + n1 * 0.35) * mag * wobble_xz
 	);
+	VERTEX.xz = clamp(VERTEX.xz, -liner_bounds, liner_bounds);
 }
 
 void fragment() {
@@ -9876,6 +9878,8 @@ func _apply_garbage_liner_wobble_params() -> void:
 	if garbage_liner_wobble_mat.shader == null:
 		garbage_liner_wobble_mat.shader = Shader.new()
 	garbage_liner_wobble_mat.shader.code = _garbage_liner_wobble_shader_code()
+	var dims := _garbage_tray_dims()
+	garbage_liner_wobble_mat.set_shader_parameter("liner_bounds", Vector2(float(dims["x"]),float(dims["z"])) * .5 - Vector2.ONE * float(dims["wall"]) * .5)
 	garbage_liner_wobble_mat.set_shader_parameter("wobble_amp", garbage_liner_wobble_amp)
 	garbage_liner_wobble_mat.set_shader_parameter("wobble_freq", garbage_liner_wobble_freq)
 	garbage_liner_wobble_mat.set_shader_parameter("wobble_speed", garbage_liner_wobble_speed)
@@ -10042,51 +10046,25 @@ func _add_garbage_liner(parent: Node3D, dims: Dictionary) -> void:
 func _make_tied_garbage_bag() -> Node3D:
 	var bag := Node3D.new()
 	bag.name = "TiedGarbageBag"
-	var mat := _garbage_liner_wobble_material()
+	var mat := _garbage_bag_material()
+	# A continuous gathered sack avoids intersecting spheres and extreme liner displacement.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var rows: Array[PackedVector3Array] = []
+	for profile in [Vector2(-.28,.01), Vector2(-.25,.30), Vector2(-.12,.48), Vector2(.10,.50), Vector2(.30,.38), Vector2(.44,.16), Vector2(.57,.055)]:
+		var row := PackedVector3Array()
+		for i in 48:
+			var angle := TAU * float(i) / 48.0
+			var fold := 1.0 + sin(angle * 9.0 + profile.x * 2.0) * .045
+			row.append(Vector3(cos(angle) * profile.y * fold, profile.x, sin(angle) * profile.y * fold * .86))
+		rows.append(row)
+	for i in range(rows.size()-1):
+		_stitch_garbage_liner_loops(st, rows[i+1], rows[i])
+	st.generate_normals()
 	var body := MeshInstance3D.new()
-	var sphere := SphereMesh.new()
-	sphere.radius = 0.42
-	sphere.height = 0.78
-	sphere.radial_segments = 28
-	sphere.rings = 18
-	body.mesh = sphere
-	body.scale = Vector3(1.34, 0.96, 1.18)
-	body.position.y = 0.10
+	body.mesh = st.commit()
 	body.material_override = mat
 	bag.add_child(body)
-	var lump := MeshInstance3D.new()
-	var lump_mesh := SphereMesh.new()
-	lump_mesh.radius = 0.24
-	lump_mesh.height = 0.38
-	lump_mesh.radial_segments = 20
-	lump_mesh.rings = 12
-	lump.mesh = lump_mesh
-	lump.position = Vector3(0.18, 0.06, 0.10)
-	lump.scale = Vector3(1.22, 0.84, 1.02)
-	lump.material_override = mat
-	bag.add_child(lump)
-	var lump2 := MeshInstance3D.new()
-	var lump2_mesh := SphereMesh.new()
-	lump2_mesh.radius = 0.20
-	lump2_mesh.height = 0.32
-	lump2_mesh.radial_segments = 18
-	lump2_mesh.rings = 12
-	lump2.mesh = lump2_mesh
-	lump2.position = Vector3(-0.16, 0.03, -0.10)
-	lump2.scale = Vector3(1.10, 0.80, 1.14)
-	lump2.material_override = mat
-	bag.add_child(lump2)
-	var lump3 := MeshInstance3D.new()
-	var lump3_mesh := SphereMesh.new()
-	lump3_mesh.radius = 0.16
-	lump3_mesh.height = 0.26
-	lump3_mesh.radial_segments = 16
-	lump3_mesh.rings = 10
-	lump3.mesh = lump3_mesh
-	lump3.position = Vector3(0.04, -0.02, 0.16)
-	lump3.scale = Vector3(1.08, 0.72, 0.92)
-	lump3.material_override = mat
-	bag.add_child(lump3)
 	var neck := MeshInstance3D.new()
 	var neck_mesh := CylinderMesh.new()
 	neck_mesh.top_radius = 0.06
@@ -10131,8 +10109,9 @@ func _apply_tied_bag_sit_transform(bag: Node3D) -> void:
 		else:
 			physical_garbage_root.add_child(bag)
 	bag.position = Vector3(0.0, 0.10 * garbage_tied_bag_scale, 0.0)
-	bag.rotation_degrees = Vector3(-8.0, 16.0, 6.0)
-	bag.scale = Vector3.ONE * garbage_tied_bag_scale
+	bag.rotation_degrees = Vector3.ZERO
+	var dims := _garbage_tray_dims()
+	bag.scale = Vector3(minf(garbage_tied_bag_scale, float(dims["x"]) - float(dims["wall"]) * 2.0), garbage_tied_bag_scale, minf(garbage_tied_bag_scale, (float(dims["z"]) - float(dims["wall"]) * 2.0) / .86))
 
 
 func _apply_garbage_liner_transform() -> void:
@@ -10168,7 +10147,7 @@ func _refresh_garbage_liner_fill() -> void:
 		return
 	var t := clampf(float(garbage_fill) / float(GARBAGE_BAG_CAPACITY), 0.0, 1.0)
 	var base: Vector3 = sack.get_meta("base_scale", Vector3.ONE)
-	sack.scale = Vector3(base.x * (1.0 + t * 0.08), base.y * (1.0 + t * 0.10), base.z * (1.0 + t * 0.08))
+	sack.scale = Vector3(base.x, base.y * (1.0 - t * 0.08), base.z)
 
 
 func _garbage_ready_for_trash() -> bool:
@@ -10204,10 +10183,11 @@ func _cinch_garbage_bag() -> void:
 			garbage_bag_root.queue_free()
 		garbage_bag_root = _make_tied_garbage_bag()
 		_apply_tied_bag_sit_transform(garbage_bag_root)
-		garbage_bag_root.scale = Vector3.ONE * (garbage_tied_bag_scale * 0.62)
+		var final_scale := garbage_bag_root.scale
+		garbage_bag_root.scale = final_scale * 0.62
 		_refresh_garbage_grab_shape()
 		var pop := create_tween()
-		pop.tween_property(garbage_bag_root, "scale", Vector3.ONE * garbage_tied_bag_scale, 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		pop.tween_property(garbage_bag_root, "scale", final_scale, 0.18).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 		_flash("Bag's full — toss it in the street", Color("B0BEC5"))
 	if garbage_liner_root != null and is_instance_valid(garbage_liner_root) and garbage_liner_root.visible:
 		var cinch_scale := Vector3(
@@ -10239,7 +10219,7 @@ func _try_pickup_garbage_bag(screen_pos: Vector2) -> bool:
 			garbage_bag_root.reparent(world, true)
 		else:
 			world.add_child(garbage_bag_root)
-	garbage_bag_root.scale = Vector3.ONE * garbage_bag_hold_scale
+	garbage_bag_root.scale = Vector3.ONE * garbage_bag_hold_scale * 0.85
 	garbage_bag_held = true
 	garbage_bag_hold_vel = Vector3.ZERO
 	garbage_bag_tilt = Vector2.ZERO
@@ -10295,8 +10275,8 @@ func _update_held_garbage_bag(delta: float) -> void:
 	## Soft-body squash/stretch while you move it — no animated crinkle.
 	var speed_xz := Vector2(garbage_bag_hold_vel.x, garbage_bag_hold_vel.z).length()
 	var stretch := clampf(speed_xz * 0.10, 0.0, 0.22)
-	var sy := garbage_bag_hold_scale * (1.0 + stretch)
-	var sxz := garbage_bag_hold_scale * (1.0 - stretch * 0.42)
+	var sy := garbage_bag_hold_scale * 0.85 * (1.0 + stretch)
+	var sxz := garbage_bag_hold_scale * 0.85 * (1.0 - stretch * 0.42)
 	garbage_bag_root.scale = Vector3(sxz, sy, sxz)
 	## Same lean-from-velocity as the drink — settle upright when still.
 	var horiz := Vector2(-garbage_bag_hold_vel.x, garbage_bag_hold_vel.z)
@@ -10330,7 +10310,7 @@ func _throw_garbage_bag_to_street(screen_pos: Vector2) -> void:
 	var push_x := clampf(aim.x + fling.x * 0.16, -2.2, 2.2)
 	var push_z := clampf(maxf(aim.z, start.z) + maxf(fling.z, 0.8) * 0.22 + 2.4, 3.4, 6.2)
 	var mid := Vector3(lerpf(start.x, push_x, 0.45), maxf(start.y, 1.7) + 0.85, lerpf(start.z, push_z, 0.42))
-	var land_y := 0.05 + 0.30 * garbage_bag_hold_scale
+	var land_y := 0.05 + 0.30 * garbage_bag_hold_scale * 0.85
 	var land := Vector3(push_x, land_y, push_z)
 	var stolen := false
 	if window_cat != null and is_instance_valid(window_cat) and window_cat.has_method("steal_garbage_bag"):
@@ -66163,7 +66143,7 @@ func _build_ingredient_legend() -> void:
 
 		var icon := TextureRect.new()
 		icon.name = "StripIcon"
-		icon.texture = FoodSpritesScript.tray_cheese_tex() if id == "cheese" else FoodSpritesScript.get_tex(id)
+		icon.texture = FoodSpritesScript.tray_cheese_tex() if id == "cheese" else (load("res://assets/ingredients/pickle_topper.png") if id == "pickle" else FoodSpritesScript.get_tex(id))
 		icon.custom_minimum_size = Vector2(ingredient_icon_w, ingredient_icon_h)
 		icon.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER

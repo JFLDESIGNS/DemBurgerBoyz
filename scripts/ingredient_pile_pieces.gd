@@ -50,19 +50,36 @@ func _piece(center:Vector2,dimensions:Vector2,brightness:float,angle:float,shado
 
 func _draw() -> void:
  if stock<=0 or not is_instance_valid(icon) or icon.texture==null:return
- var small:=topper_size*(.55 if ingredient=="cheese" else .36)
- small.y*=.8
+ # Per-bin styling keeps the smaller pieces seated on the pile.
+ var piece_scale:=.36
+ var brightness:=.46
+ var max_count:=3
+ var flatten:=.8
+ var angles:=[-.13,.12,0.0]
+ match ingredient:
+  "cheese":
+   piece_scale=.605;brightness=.414;max_count=1;flatten=.92;angles=[-.03,0.0,0.0]
+  "tomato":
+   piece_scale=.432;brightness=.506;max_count=2
+  "lettuce":
+   piece_scale=.432;max_count=2;angles=[-.23,.20,0.0]
+  "onion":
+   piece_scale=.432;brightness=.506
+  "bacon":
+   piece_scale=.432;brightness=.414;max_count=2
+ var small:=topper_size*piece_scale
+ small.y*=flatten
  var offsets:=[Vector2(-small.x*.30,small.y*.1),Vector2(small.x*.30,small.y*.18),Vector2(0,-small.y*.18)]
- var count:=mini(1 if ingredient=="cheese" else 3,stock)
- if ingredient=="cheese":offsets[0]=Vector2.ZERO
+ var count:=mini(max_count,stock)
+ if count==1:offsets[0]=Vector2.ZERO
  for i in count:
   if i==count-1 and flight_age<DURATION:continue
-  _piece(pile_center+offsets[i],small,.46,icon.rotation+[-.13,.12,0.0][i])
+  _piece(pile_center+offsets[i],small,brightness,icon.rotation+angles[i])
  if flight_age<DURATION:
   var t:=smoothstep(.08,DURATION,flight_age)
   var start:Vector2=pile_center+offsets[count-1]
   var at:=start.lerp(topper_center,t)+Vector2(0,-sin(t*PI)*12.0)
-  _piece(at,small.lerp(topper_size,t),lerpf(.46,1.0,t),icon.rotation,1.0-t)
+  _piece(at,small.lerp(topper_size,t),lerpf(brightness,1.0,t),icon.rotation+lerpf(float(angles[count-1]),0.0,t),1.0-t)
 
 func _exit_tree() -> void:
  if is_instance_valid(icon):icon.self_modulate.a=1.0
