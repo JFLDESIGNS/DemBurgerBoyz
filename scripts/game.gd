@@ -73221,7 +73221,9 @@ func _fly_sale_bills_to_hud(customer: Node3D, count: int) -> void:
 
 
 func _play_sale_payout_fx(customer: Node3D, base: int, tip: int, from_shown: float, to_amount: float) -> void:
-	if is_instance_valid(customer):customer.set_meta("cash_payment_amount",maxi(0,base+tip))
+	if is_instance_valid(customer):
+		customer.set_meta("cash_payment_amount",maxi(0,base+tip))
+		customer.set_meta("cash_tip_amount",maxi(0,tip))
 	var perf_started := Time.get_ticks_usec() if OS.is_debug_build() else 0
 	var animated_cash := is_instance_valid(customer) and (bool(customer.get_meta("cash_sequence_pending",false)) or bool(customer.get_meta("cash_released",false)))
 	if not animated_cash and game_audio != null and game_audio.has_method("play_chaching"):
