@@ -127,7 +127,9 @@ const SHAKER_SCRAPE_DB := -9.0 ## base grill scrape (~+2.5 dB vs prior)
 const SHAKER_SCRAPE_DEBRIS_DB := -2.5 ## debris scrape bed a little louder
 var _scrape_ting_cool: float = 0.0
 var _scrape_bass_pop_cool: float = 0.0 ## Subtle low pops while crust loosens
-const SCRAPE_TING_INTERVAL := 0.65
+const SCRAPE_TING_INTERVAL := 1.20
+var _last_scrape_contact_ms: int = -10000
+var _last_debris_release_ms: int = -10000
 var _last_scrape_ting_ms: int = -10000
 const SCRAPE_BASS_POP_INTERVAL := 0.28
 ## Fries pack shake — papery cup + salt-crystal rattle while whipping the serving.
@@ -934,6 +936,12 @@ func set_grill_scrape(moving: bool, on_debris: bool = false) -> void:
 	_scrape_move_on = moving
 	_scrape_debris_boost = moving and on_debris
 	if moving and not was:
+		# Regular steel contact, without musical gameplay or dance registration.
+		var now := Time.get_ticks_msec()
+		if now - _last_scrape_contact_ms >= 250:
+			_last_scrape_contact_ms = now
+			play_spatula_ting(72, 0.8)
+			_last_scrape_ting_ms = now
 		_scrape_ting_cool = randf_range(0.08, 0.22)
 		_scrape_bass_pop_cool = randf_range(0.10, 0.22)
 	if not moving:
@@ -987,7 +995,7 @@ func _sync_shaker_rattle() -> void:
 
 func _tick_scrape_tings(delta: float) -> void:
 	## Light cleaning accents; separate from the musical grill sampler.
-	## Debris kuhhh uses that same random cadence, at half volume.
+	## Debris releases stay distinct from the quieter, occasional metal accents.
 	if not _scrape_move_on:
 		return
 	_scrape_ting_cool = maxf(0.0, _scrape_ting_cool - delta)
@@ -1026,16 +1034,19 @@ func play_debris_bass_pop(volume_scale: float = 1.0) -> void:
 func play_debris_kuhh(volume_scale: float = 1.0) -> void:
 	## Dry “kuhhh” — burnt crust shearing off the steel. One-shots layer.
 	var key := "debris_kuhh_%d" % (randi() % DEBRIS_KUHH_VARIANTS)
-	var gain := (0.41 + randf() * 0.14) * clampf(volume_scale, 0.0, 1.7)
+	var gain := (0.82 + randf() * 0.28) * clampf(volume_scale, 0.0, 1.7)
 	var pitch := 0.86 + randf() * 0.30
 	_play_cached(key, _make_debris_kuhh, pitch, gain)
 
 
 func play_debris_kuhh_burst(flecks: int = 1) -> void:
-	## Each fleck rolls a chance so a swipe can stack several slightly different kuhhhs.
-	var n := clampi(flecks, 1, 5)
+	## Guarantee the first release; limit extra layers on dense patches.
+	var now := Time.get_ticks_msec()
+	if flecks<=0 or now-_last_debris_release_ms<120:return
+	_last_debris_release_ms=now
+	var n := clampi(flecks, 1, 3)
 	for i in n:
-		if randf() > 0.62:
+		if i>0 and randf() > 0.45:
 			continue
 		var delay := float(i) * randf_range(0.010, 0.042)
 		var vol := 0.78 + randf() * 0.40
@@ -1666,13 +1677,13 @@ func play_scoop() -> void:
 
 
 func play_scrape_ting(volume_scale: float = 0.62) -> void:
-	# One cleaning-only accent per half second across loop and chip events.
+	# One quiet cleaning accent per 1.1 seconds across loop and chip events.
 	# This never enters the musical tap path or its customer-dance hooks.
 	var now := Time.get_ticks_msec()
-	if now - _last_scrape_ting_ms < 500:
+	if now - _last_scrape_ting_ms < 1100:
 		return
 	_last_scrape_ting_ms = now
-	_play_cached("scrape_light_ting", _make_scrape_ting, randf_range(0.96, 1.06), volume_scale * 0.5)
+	_play_cached("scrape_light_ting", _make_scrape_ting, randf_range(0.96, 1.06), volume_scale * 0.85)
 
 
 func _make_scrape_ting() -> AudioStreamWAV:
