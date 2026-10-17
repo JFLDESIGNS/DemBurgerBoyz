@@ -73228,7 +73228,6 @@ func _play_sale_payout_fx(customer: Node3D, base: int, tip: int, from_shown: flo
 		game_audio.play_chaching()
 	var hud_n: int = clampi(4 + int(maxi(base + tip, 1) / 3), 5, 10)
 	if not animated_cash:_fly_sale_bills_to_hud(customer, hud_n)
-	_fly_pay_bills_to_tip_jar(customer, 1)
 	_start_hud_money_climb(from_shown, to_amount)
 	if OS.is_debug_build():
 		var payout_usec := Time.get_ticks_usec() - perf_started
