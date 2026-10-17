@@ -81654,6 +81654,8 @@ func _sync_mill_market_layers(background_path: String) -> void:
 			layered.scale = Vector3(STREET_MATTE_BASE_SIZE.x / 20.48, STREET_MATTE_BASE_SIZE.y / 11.53, 1.0)
 			street_matte.add_child(layered)
 			layered.configure_for_game(self)
+		# Shift this street left in camera view; move doors and effect masks with the art.
+		layered.position.x = -0.45
 		street_matte.mesh = null
 		var original_material := street_matte.material_override as StandardMaterial3D
 		if original_material != null: original_material.albedo_texture = null
