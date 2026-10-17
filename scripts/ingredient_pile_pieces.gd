@@ -133,7 +133,7 @@ func _draw() -> void:
   "cheese":
    piece_scale=.726;brightness=.3298;max_count=1;flatten=.92;angles=[-.03,0.0,0.0]
   "tomato":
-   piece_scale=.57024;brightness=.62;max_count=2
+   piece_scale=.57024;brightness=.558;max_count=2
   "lettuce":
    piece_scale=.4752;brightness=.414;max_count=2;angles=[-.23,.20,0.0]
   "onion":
