@@ -3633,7 +3633,6 @@ func _update_shift_clock(delta: float, intro_blocking: bool = false) -> void:
 
 
 func _ready() -> void:
-	add_child(preload("res://scripts/day_one_burger_coach.gd").new())
 	_ensure_hotdog_challenge()
 	randomize()
 	_seed_first_run_configs()
