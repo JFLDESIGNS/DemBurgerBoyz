@@ -23,6 +23,7 @@ var bite_material_cache: Dictionary = {}
 var cone_bounds := AABB()
 var hand_size := 1.0
 var fries_position := Vector3.ZERO
+var fry_pieces: Array[MeshInstance3D] = []
 
 func setup(owner_game: Node, eater: Node3D, model: Node3D, food_kind: String, callback: Callable, wait: float = 0.0) -> void:
  game=owner_game;customer=eater;food=model;kind=food_kind;completed=callback;delay=wait
@@ -35,6 +36,8 @@ func setup(owner_game: Node, eater: Node3D, model: Node3D, food_kind: String, ca
   if is_instance_valid(fries):
    fries_scale=fries.scale
    fries_position=fries.position
+   for mesh in fries.find_children("*","MeshInstance3D",true,false):
+    if mesh.mesh!=null and mesh.visible:fry_pieces.append(mesh)
 
  elif kind=="icecream":
   cone_bounds=game._mesh_aabb_local(food)
@@ -134,9 +137,10 @@ func _process(delta: float) -> void:
    if game.game_audio and game.game_audio.has_method("play_burger_chomp"):game.game_audio.play_burger_chomp()
  if kind=="fries":
   if is_instance_valid(fries):
-   # Preserve the prepared food material, salt and warm lighting through flight
-   # and eating. Shorten the fries above their base as portions are eaten.
-   fries.scale=fries_scale*Vector3(1,maxf(.01,1.0-float(bites)/3.0),1)
+   # Remove eaten pieces in place. Scaling the shared pivot lowered flared
+   # fry tips into the narrow carton walls and made them poke through.
+   var eaten: int=int(floor(float(fry_pieces.size())*float(bites)/3.0))
+   for i in fry_pieces.size():fry_pieces[i].visible=i>=eaten
    if bites>=3:fries.hide()
  elif kind=="icecream":
   var food_inverse:=food.global_transform.affine_inverse()

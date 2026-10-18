@@ -42,7 +42,7 @@ func run():
  var pile_position=pile.position
  var pile_scale=pile.scale
  await create_timer(1.1).timeout
- assert(pile.position.is_equal_approx(pile_position) and pile.scale.y < pile_scale.y,"Eating shortens fries without moving their base")
+ assert(pile.position.is_equal_approx(pile_position) and pile.scale.is_equal_approx(pile_scale),"Eating must not move or shrink fries through the carton")
  for mesh in pile.find_children("*","MeshInstance3D",true,false):
   if mesh.mesh!=null:assert(mesh.get_active_material(0)==original_materials[mesh],"Fries retain their original food shading")
  await create_timer(5.0).timeout

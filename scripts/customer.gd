@@ -2431,7 +2431,14 @@ func _update_sidewalk_leave(delta: float) -> void:
 				_show_departure_review()
 			if _leave_spin >= 3.2:
 				if is_instance_valid(_review_card_root): _review_card_root.hide()
-				_enter_leave_phase("couple_wait" if _waiting_for_partner() else "turn_left2")
+				if _say_departure_thanks():
+					_enter_leave_phase("thanks")
+				else:_enter_leave_phase("couple_wait" if _waiting_for_partner() else "turn_left2")
+		"thanks":
+			_apply_leave_body(delta,false)
+			_play_anim("idle")
+			_leave_spin+=delta
+			if _leave_spin>=1.25:_enter_leave_phase("couple_wait" if _waiting_for_partner() else "turn_left2")
 		"turn_left2":
 			_apply_leave_body(delta, false)
 			_play_anim("idle")
@@ -5278,6 +5285,19 @@ func step_aside_for_meal(destination_x: float, destination_z: float = WAIT_Z) ->
 		rotation_degrees.y = _face_cook_yaw()
 		_play_anim("idle")
 	)
+
+func _say_departure_thanks() -> bool:
+	if bool(get_meta("departure_thanks_checked",false)):return false
+	set_meta("departure_thanks_checked",true)
+	var choice: int=int(get_meta("mp_net_id",-1))
+	if choice<0:choice=randi_range(0,2)
+	if posmod(choice,3)!=0:return false
+	say_line("Thank you!",1.5)
+	var audio=get_tree().get_first_node_in_group("game_audio")
+	if is_instance_valid(audio):audio.play_customer_wawa_click(.15,get_customer_voice())
+	animate_wawa(1.1,1.0)
+	return true
+
 
 func _show_departure_review() -> void:
 	if _departure_review_shown: return
