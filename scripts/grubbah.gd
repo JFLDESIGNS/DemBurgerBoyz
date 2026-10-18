@@ -663,14 +663,15 @@ func update_visuals(_delta: float) -> void:
   if t>=.82 and not bag_impact_played:bag_impact_played=true;bag_impact()
  update_side_visuals()
  bag.position=bag_station_pos()
- bag.rotation=Vector3.ZERO;bag.scale=Vector3.ONE
+ var resting_bag_rotation=Vector3(0,deg_to_rad(-8.0),0)
+ bag.rotation=resting_bag_rotation;bag.scale=Vector3.ONE
  if phase in ["paper","wrapping","bagging"]:
   apply_bag_bounce(bag_bounce_age)
  if phase=="sealed":
   var t=clampf(age/BAG_PICKUP_FLIGHT,0,1)
   bag.position=pickup_bag_position(t,bag_station_pos(),ledge.position+Vector3(0,.05,0))
   var flight=clampf((t-.12)/.64,0,1)
-  bag.rotation=Vector3(sin(flight*TAU)*.20,sin(flight*PI)*.85,sin(flight*TAU)*.32)
+  bag.rotation=Vector3(sin(flight*TAU)*.20,sin(flight*PI)*.85,sin(flight*TAU)*.32)+resting_bag_rotation*smoothstep(.65,1.0,flight)
   var squash=sin(clampf(t/.12,0,1)*PI)*-.14 if t<.12 else sin(clampf((t-.12)/.64,0,1)*PI)*.10
   bag.scale=Vector3(1-squash*.5,1+squash,1-squash*.5)
   if t>=.76:

@@ -1662,9 +1662,9 @@ func play_flip_grade_announcer(grade: String, seconds_late: float = 0.0) -> void
 
 func play_delivery_time_announcer(wait_sec: float) -> void:
 	if wait_sec < 5.0:
-		_play_announcer_stream("perfect_announcer", "res://sounds/perfect.wav", 0.65)
+		_play_announcer_stream("perfect_announcer", "res://sounds/perfect.wav", 0.65 * 0.7)
 	elif wait_sec <= 8.0:
-		_play_announcer_stream("order_greatjob_announcer", "res://sounds/greatjob.wav", 0.68)
+		_play_announcer_stream("order_greatjob_announcer", "res://sounds/greatjob.wav", 0.68 * 0.7)
 
 
 func play_ready() -> void:

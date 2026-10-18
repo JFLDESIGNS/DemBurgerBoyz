@@ -106,7 +106,7 @@ func _ready() -> void:
 	var loop_wings = WINGS.duplicate() as AudioStreamWAV
 	loop_wings.loop_mode = AudioStreamWAV.LOOP_FORWARD
 	loop_wings.loop_end = int(loop_wings.get_length() * loop_wings.mix_rate)
-	wing_sound = _audio_player("Wings", loop_wings, -4.0 + linear_to_db(0.8))
+	wing_sound = _audio_player("Wings", loop_wings, -4.0 + linear_to_db(0.8 * 0.8))
 	wing_sound.pitch_scale = 1.7
 	_enter(&"Away")
 	away_duration = _rng.randf_range(27.0, 33.0)

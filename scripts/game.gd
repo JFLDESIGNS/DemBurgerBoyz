@@ -36933,7 +36933,8 @@ func _refresh_ready_fries_visuals() -> void:
 		pack.visible = i < count
 		pack.get_node("ReadyFriesGrab").input_ray_pickable = i < count
 		pack.global_position = _ready_fries_slot_world(i)
-		pack.rotation_degrees = Vector3.ZERO
+		# Stable per-slot angles keep the shelf casual without jitter on refresh.
+		pack.rotation_degrees = Vector3(0.0, [-7.0, 5.0, -3.0][i % 3], 0.0)
 		pack.scale = Vector3.ONE * fries_ready_pack_scale
 
 
