@@ -6,15 +6,17 @@ func run():
  var batches=0
  var giants=0
  var ten_patty_stacks=0
+ var eight_patty_stacks=0
  for i in 200:
   g._pick_challenge_size()
   assert(g._challenge_count==g._challenge_recipes.size())
   if g._challenge_count==1:
    giants+=1
    var recipe=g._challenge_recipes[0]
-   assert(recipe.count("patty") in [5,10] and recipe.has("cheese"))
+   assert(recipe.count("patty")>=5 and recipe.count("patty")<=10 and recipe.has("cheese"))
    assert(recipe.size()<=14,"Giant stack fits the build limit")
    if recipe.count("patty")==10:ten_patty_stacks+=1
+   if recipe.count("patty")==8:eight_patty_stacks+=1
    assert(g._challenge_time_max==recipe.count("patty")*10.0)
    assert(str(recipe.count("patty")) in g._challenge_intro_text())
   else:
@@ -26,7 +28,7 @@ func run():
     if recipe.count("patty")==2:doubles+=1
    assert(doubles in [1,2],"Large batches have only one or two doubles")
    assert(g._challenge_time_max==g._challenge_count*10.0)
- assert(batches>0 and giants>0 and ten_patty_stacks>0)
+ assert(batches>0 and giants>=70 and giants<=130 and ten_patty_stacks>0 and eight_patty_stacks>0)
  g._build_challenge_ui()
  g._show_challenge_offer()
  assert(g._challenge_phase=="offer" and g.spawned==0 and g.challenge_overlay.visible)

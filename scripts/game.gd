@@ -63233,10 +63233,10 @@ func _refresh_challenge_ticket(customer: Node3D = null) -> void:
 
 func _pick_challenge_size() -> void:
 	_challenge_recipes=[]
-	var giant_stack := randf() < .25
+	var giant_stack := randf() < .5
 	var workload := 0
 	if giant_stack:
-		var patty_count := 5 if randf() < .5 else 10
+		var patty_count := randi_range(5,10)
 		var recipe: Array = ["bun_bottom"]
 		for i in patty_count: recipe.append("patty")
 		recipe.append("cheese")
