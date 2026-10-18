@@ -118,7 +118,7 @@ func run():
   person.position.x+=1.6/60.0
   person.position.z=person._wait_z() # Departure pose resets depth each frame.
   person._avoid_visiting_cat(1.0/60.0)
-  if absf(person.position.x)<.5:assert(person.position.z-cat.position.z>1.1,"Customer must clear the cat")
+  if absf(person.position.x)<.5:assert(person.position.z-cat.position.z>.74,"Customer must clear the cat")
  # Reaching the counter X must not strand a waiting challenge guest behind the cat.
  person.position=Vector3(0,person.STAND_Y,person._wait_z()+1.45)
  person.target_x=0;person.is_waiting=true;person.is_challenge_guest=true;person._cat_detour_depth=1.45
@@ -128,7 +128,9 @@ func run():
  cat.hide()
  person._process(1.0/60.0)
  assert(person._cat_detour_depth<held_depth and person._cat_detour_depth>0,"Start returning smoothly as soon as cat leaves")
+ var bobble_before=person._bobble_phase
  for frame in 30:person._process(1.0/60.0)
+ assert(person._bobble_phase>bobble_before+.5,"Forward walk visibly advances the bobble")
  assert(person._cat_detour_depth>1.0 and person._anim_state=="walk","Return uses a slower uninterrupted walking pose")
  for frame in 150:person._process(1.0/60.0)
  assert(is_zero_approx(person._cat_detour_depth) and is_equal_approx(person.position.z,person._wait_z()),"Waiting challenge guest returns to the counter")
@@ -138,8 +140,12 @@ func run():
   var old_x=person.position.x
   person.position.x+=.35
   person._avoid_visiting_cat(.1,old_x)
-  assert(Vector2(person.position.x-cat.position.x,person.position.z-cat.position.z).length()>=1.44,"Running customer must never cross the cat clearance")
+  assert(Vector2(person.position.x-cat.position.x,person.position.z-cat.position.z).length()>=.74,"Running customer must never cross the cat clearance")
  assert(person.position.x>3,"Detour must still let the customer pass")
+ person.position=Vector3(cat.position.x,person.STAND_Y,cat.position.z+1.7)
+ person._cat_detour_depth=1.7;person.is_waiting=true
+ for frame in 180:person._avoid_visiting_cat(1.0/60.0)
+ assert(person.position.z-cat.position.z>.74 and person.position.z-cat.position.z<.91,"Wait close behind the mail cat")
  # Begging cat: meal-side and queue-forward movements must use the same clearance.
  mail.hide()
  var begging=Node3D.new();game.add_child(begging)
@@ -153,7 +159,7 @@ func run():
   person.begin_meal_walk(3.4*direction,person.WAIT_Z)
   for frame in 500:
    person._update_meal_walk(1.0/60.0)
-   assert(Vector2(person.position.x-begging.position.x,person.position.z-begging.position.z).length()>=1.44,"Meal walk must go around begging cat")
+   assert(Vector2(person.position.x-begging.position.x,person.position.z-begging.position.z).length()>=.89,"Meal walk must go around begging cat")
    if not person._meal_walk_active:break
   assert(absf(person.position.x-3.4*direction)<.02 and not person._meal_walk_active)
  person.position=Vector3(0,person.STAND_Y,person.WAIT_Z+3)
@@ -161,8 +167,9 @@ func run():
  person.begin_meal_walk(0,person.WAIT_Z)
  for frame in 250:
   person._update_meal_walk(1.0/60.0)
-  assert(person.position.z-begging.position.z>=1.44,"Queue advancement must stop behind begging cat")
+  assert(person.position.z-begging.position.z>=.89,"Queue advancement must stop behind begging cat")
   if not person._meal_walk_active:break
+ assert(person.position.z-begging.position.z<1.1,"Wait close behind the begging cat")
  begging.hide()
  person.begin_meal_walk(0,person.WAIT_Z)
  for frame in 250:

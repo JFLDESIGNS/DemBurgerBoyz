@@ -2457,7 +2457,7 @@ func _process(delta: float) -> void:
 		return
 	if bool(get_meta("front_step_walking",false)):
 		_play_anim("walk")
-		_apply_bobble(true)
+		_apply_forward_walk_bobble(delta)
 		return
 	# Arrival stops horizontal walking, but the cat detour must keep settling
 	# until the customer's normal counter position is clear again.
@@ -2466,7 +2466,7 @@ func _process(delta: float) -> void:
 		_avoid_visiting_cat(delta)
 		if absf(previous_depth-_cat_detour_depth)>.001 and _cat_detour_depth>0.0:
 			_play_anim("walk")
-			_apply_bobble(true)
+			_apply_forward_walk_bobble(delta)
 			return
 		elif _anim_state=="walk":
 			_play_anim("idle")
@@ -5313,9 +5313,11 @@ func _update_meal_walk(delta: float) -> void:
 	if travel.length_squared() > 0.000001:
 		rotation_degrees.y = _sidewalk_walk_yaw(travel.x) if absf(travel.x) > .001 else _face_cook_yaw()
 		_play_anim("walk")
-		_apply_bobble(true)
+		if absf(travel.z) > .001: _apply_forward_walk_bobble(delta)
+		else: _apply_bobble(true)
 	else:
 		_play_anim("idle")
+		_apply_bobble(true)
 	# The safe spot can be behind the cat. Do not snap back onto the meal lane.
 	if absf(global_position.x-target_x) < .01 and absf(travel.z) < .001:
 		_meal_walk_active = false
@@ -5323,6 +5325,7 @@ func _update_meal_walk(delta: float) -> void:
 		set_meta("front_step_walking", false)
 		rotation_degrees.y = _face_cook_yaw()
 		_play_anim("idle")
+		_apply_bobble(true)
 
 
 func say_thanks(duration: float = 1.5) -> void:
@@ -5396,6 +5399,17 @@ func stop_mouth_speech() -> void:
 
 var _cat_detour_depth: float = 0.0
 
+func _cat_walk_clearance(obstacle: Node3D, begging_cat: Node3D) -> float:
+	if obstacle == begging_cat:
+		return .9 * (begging_cat._size_mul()/begging_cat.DEFAULT_SIZE_MUL) * (1.0+float(begging_cat._fat)*.35)
+	return .75 # The mail courier is narrower than the begging cat.
+
+func _apply_forward_walk_bobble(delta: float) -> void:
+	_bobble_phase += delta * 9.0
+	if not is_instance_valid(_body): return
+	_body.position.y = _base_body_y + sin(_bobble_phase) * .025
+	_body.rotation_degrees = Vector3(0, 0, sin(_bobble_phase*.5)*1.4)
+
 func _avoid_visiting_cat(delta: float, previous_x: float = INF) -> void:
 	if mp_host_driven: return
 	var game = get_tree().current_scene
@@ -5408,12 +5422,11 @@ func _avoid_visiting_cat(delta: float, previous_x: float = INF) -> void:
 	var target_z := _wait_z() + (_service_backstep if is_leaving else 0.0)
 	for obstacle in cats:
 		if not obstacle.is_visible_in_tree(): continue
-		var radius: float = 1.45
-		if obstacle == cat: radius *= (cat._size_mul()/cat.DEFAULT_SIZE_MUL) * (1.0+float(cat._fat)*.35)
+		var radius: float = _cat_walk_clearance(obstacle, cat)
 		var gap: float = absf(global_position.x-obstacle.global_position.x)
-		if gap < radius+1.8 and absf(_wait_z()-obstacle.global_position.z)<radius:
-			var amount: float = 1.0-smoothstep(radius*.7,radius+1.8,gap)
-			target_z=maxf(target_z,lerpf(_wait_z(),obstacle.global_position.z+radius+.3,amount))
+		if gap < radius+.9 and absf(_wait_z()-obstacle.global_position.z)<radius:
+			var amount: float = 1.0-smoothstep(radius*.7,radius+.9,gap)
+			target_z=maxf(target_z,lerpf(_wait_z(),obstacle.global_position.z+radius+.12,amount))
 	var baseline: float = _wait_z()+(_service_backstep if is_leaving else 0.0)
 	var return_speed: float=.75 if is_waiting and not is_leaving and target_z-baseline<_cat_detour_depth else 3.5
 	_cat_detour_depth=move_toward(_cat_detour_depth,target_z-baseline,delta*return_speed)
@@ -5423,8 +5436,7 @@ func _avoid_visiting_cat(delta: float, previous_x: float = INF) -> void:
 	if is_finite(previous_x):
 		for obstacle in cats:
 			if not obstacle.is_visible_in_tree():continue
-			var clearance: float=1.45
-			if obstacle==cat:clearance *= (cat._size_mul()/cat.DEFAULT_SIZE_MUL) * (1.0+float(cat._fat)*.35)
+			var clearance: float = _cat_walk_clearance(obstacle, cat)
 			var offset: Vector2=Vector2(global_position.x-obstacle.global_position.x,global_position.z-obstacle.global_position.z)
 			if offset.length()<clearance:
 				global_position.x=previous_x
