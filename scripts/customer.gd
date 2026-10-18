@@ -5286,13 +5286,25 @@ func step_aside_for_meal(destination_x: float, destination_z: float = WAIT_Z) ->
 		_play_anim("idle")
 	)
 
+func say_thanks(duration: float = 1.5) -> void:
+	speech="Thank you!"
+	if is_instance_valid(_bubble):_bubble.hide()
+	if is_instance_valid(_bubble_bg):_bubble_bg.hide()
+	var game=get_tree().current_scene
+	var ui=game.get_node_or_null("UI/Root") if is_instance_valid(game) else null
+	if not is_instance_valid(ui):return
+	var bubble=preload("res://scripts/customer_conversation_bubble.gd").new()
+	bubble.duration=duration; bubble.follow_head=true; bubble.allow_departure=true
+	ui.add_child(bubble);bubble.setup(self,"Thank you!")
+
+
 func _say_departure_thanks() -> bool:
 	if bool(get_meta("departure_thanks_checked",false)):return false
 	set_meta("departure_thanks_checked",true)
 	var choice: int=int(get_meta("mp_net_id",-1))
 	if choice<0:choice=randi_range(0,2)
 	if posmod(choice,3)!=0:return false
-	say_line("Thank you!",1.5)
+	say_thanks(1.5)
 	var audio=get_tree().get_first_node_in_group("game_audio")
 	if is_instance_valid(audio):audio.play_customer_wawa_click(.15,get_customer_voice())
 	animate_wawa(1.1,1.0)

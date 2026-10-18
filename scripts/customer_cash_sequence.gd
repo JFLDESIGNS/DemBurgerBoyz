@@ -16,7 +16,7 @@ static func play(game: Node, customer: Node3D, special: bool) -> void:
 	if is_instance_valid(camera):customer.set_meta("cash_gaze_target",camera.global_position)
 	await game.get_tree().create_timer(.35).timeout
 	if not is_instance_valid(customer):return
-	customer.say_line("Thank you!",1.25)
+	customer.say_thanks(1.5)
 	customer.set_meta("departure_thanks_checked",true)
 	if is_instance_valid(game.game_audio):game.game_audio.play_customer_wawa_click(.15,customer.get_customer_voice())
 	customer.animate_wawa(1.1,1.0)

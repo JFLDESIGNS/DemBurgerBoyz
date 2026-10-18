@@ -2,6 +2,9 @@ extends PanelContainer
 var customer: Node3D
 var age := 0.0
 var tail: Polygon2D
+var duration := 3.6
+var follow_head := false
+var allow_departure := false
 func setup(person: Node3D, text: String) -> void:
  customer=person;name="CustomerConversation";mouse_filter=Control.MOUSE_FILTER_IGNORE;z_index=74
  var skin:=StyleBoxFlat.new();skin.bg_color=Color("FFF0C8");skin.border_color=Color("D9B76F");skin.shadow_color=Color(.18,.10,.04,.25);skin.shadow_size=5
@@ -15,14 +18,15 @@ func setup(person: Node3D, text: String) -> void:
 func _process(delta: float) -> void:
  var game=get_tree().current_scene
  var remote:bool=game.mp_enabled and not NetManager.is_host()
- if not is_instance_valid(customer) or customer.is_leaving or (not remote and not customer.is_waiting):queue_free();return
+ if not is_instance_valid(customer):queue_free();return
+ if not allow_departure and (customer.is_leaving or (not remote and not customer.is_waiting)):queue_free();return
  if game.shift_paused or game.options_menu_open:return
  age+=delta
- if age>3.6:queue_free();return
+ if age>duration:queue_free();return
  var camera:=get_viewport().get_camera_3d()
  if camera==null:return
  var parent:=get_parent() as Control
- var point:=parent.get_global_transform_with_canvas().affine_inverse()*camera.unproject_position(customer.global_position)
- position=Vector2(clampf(point.x+70.0,12.0,maxf(12.0,parent.size.x-size.x-12.0)),202.0)
+ var point:=parent.get_global_transform_with_canvas().affine_inverse()*camera.unproject_position(customer.global_position+(Vector3.UP*1.45 if follow_head else Vector3.ZERO))
+ position=Vector2(clampf(point.x+70.0,12.0,maxf(12.0,parent.size.x-size.x-12.0)),clampf(point.y-size.y*.5,12.0,maxf(12.0,parent.size.y-size.y-12.0)) if follow_head else 202.0)
  tail.position=Vector2(0,size.y*.55)
- modulate.a=smoothstep(0.0,.18,age)*(1.0-smoothstep(3.3,3.6,age))
+ modulate.a=smoothstep(0.0,.18,age)*(1.0-smoothstep(maxf(.18,duration-.3),duration,age))

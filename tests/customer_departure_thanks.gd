@@ -11,6 +11,9 @@ func run():
   if id==3:
    assert(c._leave_phase=="thanks" and c.speech=="Thank you!")
    assert(c.get_node_or_null("MouthSpeech")!=null,"Thank you has mouth animation")
+   var bubble=g.get_node("UI/Root").find_child("CustomerConversation",true,false)
+   assert(bubble!=null and bubble.follow_head and bubble.allow_departure,"Thanks uses the right-side conversation bubble")
+   assert(not c._bubble.visible and not c._bubble_bg.visible,"Old 3D speech is hidden")
    c._update_sidewalk_leave(1.3)
    assert(c._leave_phase=="turn_left2","Customer continues leaving after thanks")
   else:assert(c._leave_phase=="turn_left2","Thanks is occasional")
