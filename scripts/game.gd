@@ -330,6 +330,7 @@ var economy_tip_min_percent: float = 0.10
 var economy_tip_max_percent: float = 0.20
 var _challenge_phase: String = "" ## "", wait_line, offer, active
 var _challenge_customer: Node3D = null
+var _challenge_recipes: Array = []
 var _challenge_remaining: int = 0
 var _challenge_count: int = 10
 var _challenge_time_left: float = 0.0
@@ -63212,9 +63213,14 @@ func _refresh_challenge_ticket(customer: Node3D = null) -> void:
 
 
 func _pick_challenge_size() -> void:
-	_challenge_count = randi_range(5,10)
-	_challenge_time_max = float(_challenge_count)*10.0
-	_challenge_bonus_tip = challenge_tip_large if _challenge_count>=8 else challenge_tip_small
+	_challenge_count=randi_range(5,10)
+	_challenge_recipes=[]
+	for i in _challenge_count:
+		var recipe: Array=Array(GameDataScript.generate_challenge_order())
+		if randf()<.4:recipe.insert(2,"patty")
+		_challenge_recipes.append(recipe)
+	_challenge_time_max=float(_challenge_count)*10.0
+	_challenge_bonus_tip=challenge_tip_large if _challenge_count>=8 else challenge_tip_small
 	_challenge_remaining = _challenge_count
 	_challenge_time_left = _challenge_time_max
 
@@ -63264,7 +63270,7 @@ func _accept_challenge() -> void:
 	_update_challenge_hud()
 	_spawn_challenge_customer()
 	_start_burger_pals_parade("challenge")
-	_flash("Same burger — go!", Color("FFD54F"), 1.6)
+	_flash("Follow each burger ticket — go!", Color("FFD54F"), 1.6)
 	_mp_send_challenge_state()
 
 
@@ -63286,19 +63292,19 @@ func _decline_challenge() -> void:
 func _mp_send_challenge_state(peer_id: int = 0) -> void:
 	if not mp_enabled or not NetManager.is_host() or not NetManager.is_online():
 		return
-	var state := [_challenge_phase, _challenge_count, _challenge_remaining, int(ceil(_challenge_time_left)), _challenge_time_max, _challenge_bonus_tip, _challenge_offer_id]
+	var state := [_challenge_phase, _challenge_count, _challenge_remaining, int(ceil(_challenge_time_left)), _challenge_time_max, _challenge_bonus_tip, _challenge_offer_id, _challenge_recipes]
 	if peer_id <= 0 and get_meta("mp_challenge_sent", []) == state:
 		return
 	if peer_id <= 0:
 		set_meta("mp_challenge_sent", state)
 	if peer_id > 0:
-		mp_challenge_state.rpc_id(peer_id, _challenge_phase, _challenge_count, _challenge_remaining, _challenge_time_left, _challenge_time_max, _challenge_bonus_tip, _challenge_offer_id)
+		mp_challenge_state.rpc_id(peer_id, _challenge_phase, _challenge_count, _challenge_remaining, _challenge_time_left, _challenge_time_max, _challenge_bonus_tip, _challenge_offer_id, _challenge_recipes)
 	else:
-		mp_challenge_state.rpc(_challenge_phase, _challenge_count, _challenge_remaining, _challenge_time_left, _challenge_time_max, _challenge_bonus_tip, _challenge_offer_id)
+		mp_challenge_state.rpc(_challenge_phase, _challenge_count, _challenge_remaining, _challenge_time_left, _challenge_time_max, _challenge_bonus_tip, _challenge_offer_id, _challenge_recipes)
 
 
 @rpc("authority", "call_remote", "reliable")
-func mp_challenge_state(phase: String, count: int, remaining: int, time_left: float, time_max: float, bonus_tip: int, offer_id: int = 0) -> void:
+func mp_challenge_state(phase: String, count: int, remaining: int, time_left: float, time_max: float, bonus_tip: int, offer_id: int = 0, recipes: Array = []) -> void:
 	_mp_flush_scene_snapshots()
 	if NetManager.is_host():
 		return
@@ -63313,6 +63319,8 @@ func mp_challenge_state(phase: String, count: int, remaining: int, time_left: fl
 	_challenge_time_left = maxf(0.0, time_left)
 	_challenge_time_max = maxf(0.0, time_max)
 	_challenge_bonus_tip = maxi(0, bonus_tip)
+	_challenge_recipes=recipes.duplicate(true)
+	_apply_next_challenge_recipe()
 	if phase == "offer":
 		if challenge_body_label != null:
 			challenge_body_label.text = "One recipe. Beat the clock. Earn the bonus."
@@ -63365,7 +63373,8 @@ func mp_challenge_result(success: bool, tip_amt: int) -> void:
 
 
 func _spawn_challenge_customer() -> void:
-	var order: Array[String] = GameDataScript.generate_challenge_order()
+	var order: Array[String] = []
+	order.assign(_challenge_recipes[0] if not _challenge_recipes.is_empty() else GameDataScript.generate_challenge_order())
 	var color: Color = GameDataScript.CUSTOMER_COLORS[randi() % GameDataScript.CUSTOMER_COLORS.size()]
 	var lane := 0
 	var skin_idx := _next_customer_skin_idx()
@@ -63435,6 +63444,18 @@ func _debug_force_challenge() -> void:
 	_flash("Challenge queued", Color("FFD54F"))
 
 
+func _apply_next_challenge_recipe() -> void:
+	if _challenge_remaining<=0 or not is_instance_valid(_challenge_customer) or _challenge_recipes.is_empty():return
+	var index: int=clampi(_challenge_count-_challenge_remaining,0,_challenge_recipes.size()-1)
+	var recipe: Array=_challenge_recipes[index]
+	if Array(_challenge_customer.order)==recipe:return
+	var was_selected: bool=selected_customer==_challenge_customer
+	_remove_ticket(_challenge_customer)
+	_challenge_customer.order.assign(recipe)
+	_create_ticket(_challenge_customer)
+	if was_selected:_select_ticket_local(_challenge_customer)
+
+
 func _complete_challenge_serve(station_index: int, cust: Node3D, remote_drink: Node3D = null) -> void:
 	if cust == null or not is_instance_valid(cust):
 		return
@@ -63448,7 +63469,7 @@ func _complete_challenge_serve(station_index: int, cust: Node3D, remote_drink: N
 	var result: Dictionary = GameDataScript.compare_orders(items, cust.order)
 	var quality := float(result.get("quality", 0.0))
 	var guest_mp := mp_enabled and not NetManager.is_host()
-	if quality < 0.4:
+	if quality < 0.4 or items.count("patty")!=cust.order.count("patty"):
 		combo = 0
 		_flash("Wrong burger — same ticket again (%d left)" % _challenge_remaining, Color("EF5350"))
 		_clear_station(station_index)
@@ -63489,6 +63510,7 @@ func _complete_challenge_serve(station_index: int, cust: Node3D, remote_drink: N
 		cust.set_meta("profit_built", stations[station_index]["items"].duplicate())
 		_credit_ticket_payout({"base": base_pay, "tip": 0, "total": base_pay}, base_pay, cust)
 		total_served += 1
+	_apply_next_challenge_recipe()
 	_refresh_challenge_ticket(cust)
 	_update_challenge_hud()
 	_mp_send_challenge_state()
