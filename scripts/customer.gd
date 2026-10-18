@@ -2452,18 +2452,22 @@ func _update_sidewalk_leave(delta: float) -> void:
 
 
 func _process(delta: float) -> void:
-	# Queue slots and departure holds control customer spacing. Sidewalk crowd
-	# steering must not push customers forward/backward out of their service path.
-	_advance_customer(delta)
+	if bool(get_meta("front_step_walking",false)):
+		_play_anim("walk")
+		_apply_bobble(true)
+		return
 	# Arrival stops horizontal walking, but the cat detour must keep settling
 	# until the customer's normal counter position is clear again.
 	if _cat_detour_depth>0.0 and not mp_host_driven and is_waiting and not is_leaving and not _eating and not is_ragdoll and not _celebrating and not _powdering and not bool(get_meta("meal_stepping_aside",false)) and absf(target_x-global_position.x)<=.05:
 		var previous_depth: float=_cat_detour_depth
 		_avoid_visiting_cat(delta)
-		if _cat_detour_depth>0.0 and absf(previous_depth-_cat_detour_depth)>.001:
+		if absf(previous_depth-_cat_detour_depth)>.001 and _cat_detour_depth>0.0:
 			_play_anim("walk")
+			_apply_bobble(true)
+			return
 		elif _anim_state=="walk":
 			_play_anim("idle")
+	_advance_customer(delta)
 
 func _advance_customer(delta: float) -> void:
 	if _cat_pet_left > 0.0:
@@ -5375,7 +5379,8 @@ func _avoid_visiting_cat(delta: float) -> void:
 			var amount: float = 1.0-smoothstep(radius*.7,radius+1.4,gap)
 			target_z=maxf(target_z,lerpf(_wait_z(),obstacle.global_position.z+radius+.3,amount))
 	var baseline: float = _wait_z()+(_service_backstep if is_leaving else 0.0)
-	_cat_detour_depth=move_toward(_cat_detour_depth,target_z-baseline,delta*3.5)
+	var return_speed: float=.75 if is_waiting and not is_leaving and target_z-baseline<_cat_detour_depth else 3.5
+	_cat_detour_depth=move_toward(_cat_detour_depth,target_z-baseline,delta*return_speed)
 	global_position.z=baseline+_cat_detour_depth
 
 func pet_cat() -> void:

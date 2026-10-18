@@ -81866,11 +81866,16 @@ func _update_meal_queue() -> void:
 			var start_depth: float=person.global_position.z
 			var end_depth: float=CustomerScript.WAIT_Z+slot*CustomerScript.QUEUE_SPACING
 			person.set_meta("meal_queue_depth",start_depth)
+			person.set_meta("front_step_walking",true)
 			move.tween_method(func(depth: float):
 				if is_instance_valid(person):
 					person.set_meta("meal_queue_depth",depth)
 					person.global_position.z=depth
-			,start_depth,end_depth,1.35).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+			,start_depth,end_depth,maxf(1.8,absf(end_depth-start_depth)/.75)).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+			move.tween_callback(func():
+				if is_instance_valid(person):
+					person.set_meta("front_step_walking",false)
+					person._play_anim("idle"))
 		slot+=1
 
 
