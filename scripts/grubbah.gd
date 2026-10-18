@@ -663,7 +663,7 @@ func update_visuals(_delta: float) -> void:
   if t>=.82 and not bag_impact_played:bag_impact_played=true;bag_impact()
  update_side_visuals()
  bag.position=bag_station_pos()
- var resting_bag_rotation=Vector3(0,deg_to_rad(-8.0),0)
+ var resting_bag_rotation=Vector3(0,deg_to_rad(8.0),0)
  bag.rotation=resting_bag_rotation;bag.scale=Vector3.ONE
  if phase in ["paper","wrapping","bagging"]:
   apply_bag_bounce(bag_bounce_age)
