@@ -10,7 +10,7 @@ enum Band { FM, AM }
 ## Curated live MP3 stations (real broadcasts, not canned demo tracks).
 const FM_STATIONS: Array[Dictionary] = [
 	{"freq": "88.5", "name": "Classic Vinyl", "url": "https://icecast.walmradio.com:8443/classic"},
-	{"freq": "92.1", "name": "Smooth Jazz", "url": "http://jking.cdnstream1.com/b22139_128mp3"},
+	{"freq": "92.1", "name": "Burger Pals Mix", "local_playlist": true},
 	{"freq": "95.7", "name": "Adroit Jazz", "url": "https://icecast.walmradio.com:8443/jazz"},
 	{"freq": "98.3", "name": "Country .977", "url": "http://26343.live.streamtheworld.com/977_COUNTRY_SC"},
 	{"freq": "101.3", "name": "Classic FM", "url": "http://ice-the.musicradio.com/ClassicFMMP3"},
@@ -18,6 +18,44 @@ const FM_STATIONS: Array[Dictionary] = [
 	{"freq": "107.1", "name": "1LIVE Rock", "url": "http://wdr-1live-live.icecast.wdr.de/wdr/1live/live/mp3/128/stream.mp3"},
 ]
 const SMOOTH_JAZZ_FM_INDEX := 1
+const LOCAL_TRACKS: Array[String] = [
+	"res://sounds/radio/smooth_jazzy_vibes.mp3",
+	"res://sounds/radio/smooth_jazzy_vibes_2.mp3",
+	"res://sounds/radio/unbreak_me_hearts.mp3",
+	"res://sounds/radio/sax_and_piano.mp3",
+]
+const LOCAL_TITLES := ["Smooth Jazzy Vibes", "Smooth Jazzy Vibes (1)", "Unbreak Me Hearts", "Sax and Piano"]
+var _shuffle_queue: Array = []
+var _last_local_track := -1
+
+func _is_local_station() -> bool:
+	return bool(current_channel().get("local_playlist", false))
+
+func _next_local_track() -> int:
+	if _shuffle_queue.is_empty():
+		_shuffle_queue = range(LOCAL_TRACKS.size())
+		_shuffle_queue.shuffle()
+		if _shuffle_queue[0] == _last_local_track:
+			var swap = _shuffle_queue[0]
+			_shuffle_queue[0] = _shuffle_queue[1]
+			_shuffle_queue[1] = swap
+	_last_local_track = int(_shuffle_queue.pop_front())
+	return _last_local_track
+
+func _play_local_track() -> void:
+	var index := _next_local_track()
+	var stream := load(LOCAL_TRACKS[index]) as AudioStreamMP3
+	if stream == null:
+		_emit_status("Unable to load radio track")
+		return
+	stream = stream.duplicate() as AudioStreamMP3
+	stream.loop = false
+	_player.stream = stream
+	_player.volume_db = _vol_db()
+	_player.play()
+	_has_playback = true
+	_emit_status("♪ " + LOCAL_TITLES[index])
+
 
 const AM_STATIONS: Array[Dictionary] = [
 	{"freq": "680", "name": "BBC World", "url": "http://stream.live.vc.bbcmedia.co.uk/bbc_world_service"},
@@ -34,7 +72,7 @@ const RECONNECT_AFTER := 12.0
 
 var powered: bool = false
 var band: int = Band.FM
-## Default: FM 92.1 Smooth Jazz (index in FM_STATIONS).
+## Default: FM 92.1 local shuffled playlist.
 var channel_index: int = SMOOTH_JAZZ_FM_INDEX
 var volume_linear: float = 0.80
 ## Temporary mute for combat theme — keeps stream alive so resume is instant.
@@ -110,7 +148,7 @@ func toggle_power() -> void:
 
 func toggle_band() -> void:
 	band = Band.AM if band == Band.FM else Band.FM
-	## FM boots on Smooth Jazz; AM starts at the first listing.
+	## FM boots on the local mix; AM starts at the first listing.
 	channel_index = SMOOTH_JAZZ_FM_INDEX if band == Band.FM else 0
 	if channel_index >= channel_count():
 		channel_index = 0
@@ -207,7 +245,10 @@ func set_combat_silence(on: bool) -> void:
 	else:
 		_player.volume_db = _vol_db()
 		if powered:
-			_emit_status("♪ LIVE %s" % short_title())
+			if _is_local_station() and _last_local_track >= 0:
+				_emit_status("♪ " + LOCAL_TITLES[_last_local_track])
+			else:
+				_emit_status("♪ LIVE %s" % short_title())
 		else:
 			_emit_status("Radio off")
 
@@ -230,7 +271,7 @@ func _vol_db() -> float:
 
 
 func _process(delta: float) -> void:
-	if not powered:
+	if not powered or _is_local_station():
 		return
 	_http.poll()
 	_poll_http(delta)
@@ -244,7 +285,11 @@ func _process(delta: float) -> void:
 
 
 func _tune_current() -> void:
-	_disconnect_stream(false)
+	_disconnect_stream(true)
+	if _is_local_station():
+		channel_changed.emit(channel_index, channel_title())
+		_play_local_track()
+		return
 	_redirects = 0
 	channel_changed.emit(channel_index, channel_title())
 	_emit_status("Tuning live %s..." % short_title())
@@ -396,6 +441,9 @@ func _check_stall(delta: float) -> void:
 
 func _on_playback_finished() -> void:
 	if not powered:
+		return
+	if _is_local_station():
+		_play_local_track()
 		return
 	_has_playback = false
 	_try_play_buffer(true)
