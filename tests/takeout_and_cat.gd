@@ -94,6 +94,8 @@ func run():
  mobile.state.burgers_packed=1;mobile.set_phase("bagging");mobile.age=2
  assert(not mobile.try_seal_bag() and mobile.state.phase=="paper","One burger cannot seal a three-burger order")
  assert(Array(person.order)==Array(mobile.state.recipes[1]+mobile.state.takeout_sides),"Ticket advances to the next burger recipe")
+ mobile.state["side_packs"]={}
+ for side in mobile.required_sides():mobile.state.side_packs[side]={"elapsed":2.0,"kind":"fries" if side=="fries" else "drink","flavor":"cola","source":Vector3.ZERO}
  mobile.state.burgers_packed=3;mobile.set_phase("bagging");mobile.age=2
  assert(mobile.try_seal_bag() and mobile.state.phase=="sealed")
  mobile.update_visuals(0)
@@ -117,5 +119,15 @@ func run():
   person.position.z=person._wait_z() # Departure pose resets depth each frame.
   person._avoid_visiting_cat(1.0/60.0)
   if absf(person.position.x)<.5:assert(person.position.z-cat.position.z>1.1,"Customer must clear the cat")
+ # Reaching the counter X must not strand a waiting challenge guest behind the cat.
+ person.position=Vector3(0,person.STAND_Y,person._wait_z()+1.45)
+ person.target_x=0;person.is_waiting=true;person.is_challenge_guest=true;person._cat_detour_depth=1.45
+ person._process(1.0/60.0)
+ assert(person._cat_detour_depth>1.4,"Hold clearance while cat occupies the counter")
+ cat.hide()
+ person._process(1.0/60.0)
+ assert(person._cat_detour_depth<1.45 and person._cat_detour_depth>0,"Start returning smoothly as soon as cat leaves")
+ for frame in 90:person._process(1.0/60.0)
+ assert(is_zero_approx(person._cat_detour_depth) and is_equal_approx(person.position.z,person._wait_z()),"Waiting challenge guest returns to the counter")
  print("TAKEOUT_AND_CAT_OK")
  game.queue_free();await process_frame;quit()

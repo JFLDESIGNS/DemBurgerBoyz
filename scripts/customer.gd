@@ -2448,6 +2448,15 @@ func _process(delta: float) -> void:
 	# Queue slots and departure holds control customer spacing. Sidewalk crowd
 	# steering must not push customers forward/backward out of their service path.
 	_advance_customer(delta)
+	# Arrival stops horizontal walking, but the cat detour must keep settling
+	# until the customer's normal counter position is clear again.
+	if _cat_detour_depth>0.0 and not mp_host_driven and is_waiting and not is_leaving and not _eating and not is_ragdoll and not _celebrating and not _powdering and not bool(get_meta("meal_stepping_aside",false)) and absf(target_x-global_position.x)<=.05:
+		var previous_depth: float=_cat_detour_depth
+		_avoid_visiting_cat(delta)
+		if _cat_detour_depth>0.0 and absf(previous_depth-_cat_detour_depth)>.001:
+			_play_anim("walk")
+		elif _anim_state=="walk":
+			_play_anim("idle")
 
 func _advance_customer(delta: float) -> void:
 	if _cat_pet_left > 0.0:
