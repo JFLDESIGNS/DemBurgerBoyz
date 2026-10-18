@@ -29,6 +29,20 @@ func run():
    assert(doubles in [1,2],"Large batches have only one or two doubles")
    assert(g._challenge_time_max==g._challenge_count*10.0)
  assert(batches>0 and giants>=70 and giants<=130 and ten_patty_stacks>0 and eight_patty_stacks>0)
+ for count in range(4,11):
+  var stack:Array=["bun_bottom"]
+  for i in count:stack.append("patty")
+  stack.append_array(["cheese","bun_top"])
+  var lines=g._ticket_line_specs(stack)
+  var line=lines[0]
+  assert(line.label=="%dx PATTY" % count)
+  assert(g._ticket_line_is_done(line.id,stack))
+  var wrong=stack.duplicate();wrong.erase("patty")
+  assert(not g._ticket_line_is_done(line.id,wrong))
+  assert(g.GameDataScript.compare_orders(stack,stack).perfect)
+  var triple:Array=["bun_bottom","patty","patty","patty","cheese","bun_top"]
+  assert(not g._ticket_line_is_done(line.id,triple))
+  assert(not g.GameDataScript.compare_orders(triple,stack).perfect)
  g._build_challenge_ui()
  g._show_challenge_offer()
  assert(g._challenge_phase=="offer" and g.spawned==0 and g.challenge_overlay.visible)

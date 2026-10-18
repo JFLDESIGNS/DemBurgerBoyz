@@ -50895,8 +50895,10 @@ func _review_order_phrase(customer: Node3D) -> String:
 		var patty_word := "plain burger"
 		if patty_count == 2:
 			patty_word = "double patty burger"
-		elif patty_count >= 3:
+		elif patty_count == 3:
 			patty_word = "triple patty burger"
+		elif patty_count > 3:
+			patty_word = "%d patty burger" % patty_count
 		if not toppings.is_empty():
 			patty_word += " with " + ", ".join(toppings)
 		bits.append(patty_word)
@@ -64342,7 +64344,9 @@ func _ticket_line_specs(order: Array) -> Array:
 	for item in burger:
 		if item == "patty":
 			patty_count += 1
-	if patty_count >= 3:
+	if patty_count > 3:
+		lines.append({"id": "patty_count_%d" % patty_count, "label": "%dx PATTY" % patty_count})
+	elif patty_count == 3:
 		lines.append({"id": "triple_patty", "label": "TRIPLE PATTY"})
 	elif patty_count >= 2:
 		lines.append({"id": "double_patty", "label": "2x Patty"})
@@ -64372,6 +64376,8 @@ func _ticket_line_is_done(line_id: String, built: Array, customer: Node3D = null
 	if is_instance_valid(customer) and customer != selected_customer:
 		return false
 	if is_instance_valid(customer) and customer.get_meta("hotdog_preview", false): return false
+	if line_id.begins_with("patty_count_"):
+		return built.count("patty") == int(line_id.trim_prefix("patty_count_"))
 	if GameDataScript.is_soda_item(line_id):
 		if _customer_soda_handed(customer):
 			return true
