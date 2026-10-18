@@ -13,7 +13,10 @@ func run():
  assert(diners[0].get_meta("meal_queue_slot")==0)
  assert(diners[1].get_meta("meal_queue_slot")==1)
  assert(diners[1]._wait_z()>diners[0]._wait_z())
- await create_timer(1.5).timeout
+ for frame in 360:
+  for diner in diners:
+   if diner._meal_walk_active:diner._update_meal_walk(1.0/60.0)
+ assert(not diners[0]._meal_walk_active and not diners[1]._meal_walk_active)
  # The game removes served customers from its order list before their meal ends.
  g.customers.erase(diners[0]);diners[0]._eating=true;diners[0].is_leaving=true
  g._update_meal_queue()
@@ -23,5 +26,9 @@ func run():
  diners[0].global_position.x+=3
  g._update_meal_queue()
  assert(diners[1].get_meta("meal_queue_slot")==0,"Advance only after predecessor has physically left")
+ assert(diners[1]._meal_walk_active,"Queue advancement uses walking rather than a position tween")
+ for frame in 360:
+  if diners[1]._meal_walk_active:diners[1]._update_meal_walk(1.0/60.0)
+ assert(is_equal_approx(diners[1].global_position.z,diners[1].WAIT_Z))
  print("MEAL_QUEUE_RESERVATION_OK")
  quit()

@@ -2452,6 +2452,9 @@ func _update_sidewalk_leave(delta: float) -> void:
 
 
 func _process(delta: float) -> void:
+	if _meal_walk_active and not mp_host_driven:
+		_update_meal_walk(delta)
+		return
 	if bool(get_meta("front_step_walking",false)):
 		_play_anim("walk")
 		_apply_bobble(true)
@@ -5284,14 +5287,43 @@ func step_aside_for_meal(destination_x: float, destination_z: float = WAIT_Z) ->
 	rotation_degrees.y = _sidewalk_walk_yaw(destination_x-global_position.x)
 	_anim_state = ""
 	_play_anim("walk")
-	var walk_seconds := maxf(0.35, absf(destination_x-global_position.x) / LEAVE_WALK_SPEED)
-	var step := create_tween()
-	step.tween_property(self, "global_position", Vector3(destination_x,global_position.y,destination_z), walk_seconds).set_trans(Tween.TRANS_LINEAR)
-	step.tween_callback(func():
+	begin_meal_walk(destination_x, destination_z)
+
+
+var _meal_walk_active := false
+
+func begin_meal_walk(destination_x: float, destination_z: float) -> void:
+	# Both stepping aside and advancing the meal queue use the cat-aware route.
+	target_x = destination_x
+	_home_x = destination_x
+	set_meta("meal_queue_depth", destination_z)
+	_cat_detour_depth = global_position.z - _wait_z()
+	_meal_walk_active = true
+
+func _update_meal_walk(delta: float) -> void:
+	if is_ragdoll:
+		_meal_walk_active = false
 		set_meta("meal_stepping_aside", false)
+		set_meta("front_step_walking", false)
+		return
+	var before := global_position
+	global_position.x = move_toward(global_position.x, target_x, delta * 1.35)
+	_avoid_visiting_cat(delta, before.x)
+	var travel := global_position - before
+	if travel.length_squared() > 0.000001:
+		rotation_degrees.y = _sidewalk_walk_yaw(travel.x) if absf(travel.x) > .001 else _face_cook_yaw()
+		_play_anim("walk")
+		_apply_bobble(true)
+	else:
+		_play_anim("idle")
+	# The safe spot can be behind the cat. Do not snap back onto the meal lane.
+	if absf(global_position.x-target_x) < .01 and absf(travel.z) < .001:
+		_meal_walk_active = false
+		set_meta("meal_stepping_aside", false)
+		set_meta("front_step_walking", false)
 		rotation_degrees.y = _face_cook_yaw()
 		_play_anim("idle")
-	)
+
 
 func say_thanks(duration: float = 1.5) -> void:
 	speech="Thank you!"
@@ -5377,7 +5409,7 @@ func _avoid_visiting_cat(delta: float, previous_x: float = INF) -> void:
 	for obstacle in cats:
 		if not obstacle.is_visible_in_tree(): continue
 		var radius: float = 1.45
-		if obstacle == cat: radius += float(cat._fat)*.18 + float(cat._giant)*.35
+		if obstacle == cat: radius *= (cat._size_mul()/cat.DEFAULT_SIZE_MUL) * (1.0+float(cat._fat)*.35)
 		var gap: float = absf(global_position.x-obstacle.global_position.x)
 		if gap < radius+1.8 and absf(_wait_z()-obstacle.global_position.z)<radius:
 			var amount: float = 1.0-smoothstep(radius*.7,radius+1.8,gap)
@@ -5392,7 +5424,7 @@ func _avoid_visiting_cat(delta: float, previous_x: float = INF) -> void:
 		for obstacle in cats:
 			if not obstacle.is_visible_in_tree():continue
 			var clearance: float=1.45
-			if obstacle==cat:clearance+=float(cat._fat)*.18+float(cat._giant)*.35
+			if obstacle==cat:clearance *= (cat._size_mul()/cat.DEFAULT_SIZE_MUL) * (1.0+float(cat._fat)*.35)
 			var offset: Vector2=Vector2(global_position.x-obstacle.global_position.x,global_position.z-obstacle.global_position.z)
 			if offset.length()<clearance:
 				global_position.x=previous_x
