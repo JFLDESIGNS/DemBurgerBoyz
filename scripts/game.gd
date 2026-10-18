@@ -963,6 +963,7 @@ var _serve_crumb_pool: Array[ColorRect] = []
 var _serve_crumb_active: Array[Dictionary] = []
 var _serve_fx_overlay: Control = null
 var _ingredient_fly_busy: bool = false
+var _robot_cook: Node = null
 var grill_ignore_pad_until: float = 0.0
 var grill_residue: Array = [] ## 0 clean · 0.5 half-scraped · 1.0 full stuck-on
 var grill_residue_meshes: Array = [] ## legacy single mesh slot (unused visually)
@@ -15408,9 +15409,14 @@ func _nudge_debris_piles(tool_pos: Vector3, move_xz: Vector2, moved: float) -> v
 		## Match the long, thin PNG instead of using a large circular radius. The old
 		## circle reached almost a foot toward the cook and moved piles before contact.
 		var small_ease := lerpf(1.45, 1.0, clampf((mass - 0.2) / 1.1, 0.0, 1.0))
-		var half_w := (w * 0.50 + 0.010) * small_ease
-		var half_d := (_debris_pile_depth(w) * 0.50 + 0.008) * small_ease
-		var delta_xz := Vector2(tool_pos.x - root.position.x, tool_pos.z - root.position.z)
+		var half_w := (w * 0.50 + 0.075) * small_ease
+		var half_d := (_debris_pile_depth(w) * 0.50 + 0.055) * small_ease
+		# Sweep the whole blade stroke so fast movement cannot skip thin debris.
+		var end := Vector2(tool_pos.x, tool_pos.z)
+		var start := end - move_xz
+		var center := Vector2(root.position.x, root.position.z)
+		var closest := Geometry2D.get_closest_point_to_segment(center, start, end)
+		var delta_xz := closest - center
 		var contact := Vector2(delta_xz.x / maxf(half_w, 0.001), delta_xz.y / maxf(half_d, 0.001)).length()
 		if contact > 1.0:
 			i += 1
@@ -18507,6 +18513,17 @@ func _update_grill_roomba(delta: float) -> void:
 		return
 	if grill_roomba_power_off or grill_roomba_home_requested:
 		_update_roomba_home(delta)
+		return
+	if not is_instance_valid(_robot_cook):
+		_robot_cook = load("res://scripts/robot_cook.gd").new()
+		_robot_cook.game = self
+		add_child(_robot_cook)
+	if _robot_cook.update(delta):
+		if game_audio: game_audio.set_roomba_drive(grill_roomba_vel.length() > 0.01)
+		grill_roomba_sync_t = maxf(0.0, grill_roomba_sync_t - delta)
+		if mp_enabled and grill_roomba_sync_t <= 0.0:
+			grill_roomba_sync_t = ROOMBA_SYNC_INTERVAL
+			_mp_send_roomba_pose()
 		return
 	var old_pos:= grill_roomba_root.global_position
 	var old_xz:= Vector2(old_pos.x, old_pos.z)
@@ -81881,3 +81898,11 @@ func _update_meal_queue() -> void:
 func mp_grisaldi_story(nid: int) -> void:
 	var person=_customer_by_net_id(nid)
 	if is_instance_valid(person):preload("res://scripts/customer_cash_sequence.gd").story(self,person)
+
+
+@rpc("authority", "call_local", "reliable")
+func mp_robot_cook_visual(id: String, station: int, source: Vector3, fork: Vector3) -> void:
+	var fx = load("res://scripts/robot_cook.gd").new()
+	fx.game = self
+	add_child(fx)
+	fx.visual(id, station, source, fork)
