@@ -893,10 +893,10 @@ func courier_carry_position() -> Vector3:
 func _pose_driver_car(t: float, from_x: float, to_x: float) -> void:
  # Deterministic from replicated phase age; settles straight at either endpoint.
  var envelope := sin(PI * t)
- var weave := .55 * sin(t * TAU * 1.5) * envelope
+ var weave := .9 * sin(t * TAU * 1.5) * envelope
  car.position = Vector3(lerpf(from_x, to_x, t), car_ground_y, game.STREET_CAR_Z + .45 + weave)
- car.rotation.y = .17 * sin(t * TAU * 1.5 + PI * .5) * envelope
- car.rotation.z = -.035 * sin(t * TAU * 1.5) * envelope
+ car.rotation.y = .28 * sin(t * TAU * 1.5 + PI * .5) * envelope
+ car.rotation.z = -.055 * sin(t * TAU * 1.5) * envelope
 
 func _add_driver_roof_sign() -> void:
  var bounds: AABB = game._shop_preview_bounds(car)

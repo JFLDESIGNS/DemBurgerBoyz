@@ -23,6 +23,6 @@ func run():
  assert(driver.publications==2,"Only publish block/unblock transitions")
  driver.car=Node3D.new();g.add_child(driver.car)
  driver._pose_driver_car(.3,-9,10)
- assert(absf(driver.car.position.z-(g.STREET_CAR_Z+.45))>.1)
+ assert(absf(driver.car.position.z-(g.STREET_CAR_Z+.45))>.2)
  print("GROOBER_CAT_WAIT_OK")
  quit()

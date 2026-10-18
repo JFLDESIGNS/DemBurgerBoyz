@@ -2565,8 +2565,9 @@ func _advance_customer(delta: float) -> void:
 		_shake_tilt = 35.0
 
 	if is_leaving:
+		var previous_x: float=global_position.x
 		_update_sidewalk_leave(delta)
-		_avoid_visiting_cat(delta)
+		_avoid_visiting_cat(delta,previous_x)
 		return
 
 	if _eating:
@@ -2580,8 +2581,9 @@ func _advance_customer(delta: float) -> void:
 		rotation_degrees.x = 0.0
 		rotation_degrees.y = _sidewalk_walk_yaw(dx)
 		_arrive_turning = false
+		var previous_x: float=global_position.x
 		global_position.x += signf(dx) * minf(absf(dx), delta * (3.5 if bool(get_meta("recruited_running",false)) else 1.6))
-		_avoid_visiting_cat(delta)
+		_avoid_visiting_cat(delta,previous_x)
 		_play_anim("walk")
 		_apply_bobble(true)
 		if _bar_root:
@@ -5362,7 +5364,7 @@ func stop_mouth_speech() -> void:
 
 var _cat_detour_depth: float = 0.0
 
-func _avoid_visiting_cat(delta: float) -> void:
+func _avoid_visiting_cat(delta: float, previous_x: float = INF) -> void:
 	if mp_host_driven: return
 	var game = get_tree().current_scene
 	if not is_instance_valid(game): return
@@ -5374,16 +5376,27 @@ func _avoid_visiting_cat(delta: float) -> void:
 	var target_z := _wait_z() + (_service_backstep if is_leaving else 0.0)
 	for obstacle in cats:
 		if not obstacle.is_visible_in_tree(): continue
-		var radius: float = 1.15
+		var radius: float = 1.45
 		if obstacle == cat: radius += float(cat._fat)*.18 + float(cat._giant)*.35
 		var gap: float = absf(global_position.x-obstacle.global_position.x)
-		if gap < radius+1.4 and absf(_wait_z()-obstacle.global_position.z)<radius:
-			var amount: float = 1.0-smoothstep(radius*.7,radius+1.4,gap)
+		if gap < radius+1.8 and absf(_wait_z()-obstacle.global_position.z)<radius:
+			var amount: float = 1.0-smoothstep(radius*.7,radius+1.8,gap)
 			target_z=maxf(target_z,lerpf(_wait_z(),obstacle.global_position.z+radius+.3,amount))
 	var baseline: float = _wait_z()+(_service_backstep if is_leaving else 0.0)
 	var return_speed: float=.75 if is_waiting and not is_leaving and target_z-baseline<_cat_detour_depth else 3.5
 	_cat_detour_depth=move_toward(_cat_detour_depth,target_z-baseline,delta*return_speed)
 	global_position.z=baseline+_cat_detour_depth
+	# A moving cat can enter the route after the detour starts. Hold horizontal
+	# progress until there is room, rather than letting a fast customer cut through.
+	if is_finite(previous_x):
+		for obstacle in cats:
+			if not obstacle.is_visible_in_tree():continue
+			var clearance: float=1.45
+			if obstacle==cat:clearance+=float(cat._fat)*.18+float(cat._giant)*.35
+			var offset: Vector2=Vector2(global_position.x-obstacle.global_position.x,global_position.z-obstacle.global_position.z)
+			if offset.length()<clearance:
+				global_position.x=previous_x
+				if is_leaving:_leave_walk_x=previous_x
 
 func pet_cat() -> void:
 	if _eating or is_leaving or is_ragdoll or not is_waiting or not is_instance_valid(_anim_player): return

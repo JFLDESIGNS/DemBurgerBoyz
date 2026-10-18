@@ -124,12 +124,21 @@ func run():
  person.target_x=0;person.is_waiting=true;person.is_challenge_guest=true;person._cat_detour_depth=1.45
  person._process(1.0/60.0)
  assert(person._cat_detour_depth>1.4,"Hold clearance while cat occupies the counter")
+ var held_depth=person._cat_detour_depth
  cat.hide()
  person._process(1.0/60.0)
- assert(person._cat_detour_depth<1.45 and person._cat_detour_depth>0,"Start returning smoothly as soon as cat leaves")
+ assert(person._cat_detour_depth<held_depth and person._cat_detour_depth>0,"Start returning smoothly as soon as cat leaves")
  for frame in 30:person._process(1.0/60.0)
  assert(person._cat_detour_depth>1.0 and person._anim_state=="walk","Return uses a slower uninterrupted walking pose")
  for frame in 150:person._process(1.0/60.0)
  assert(is_zero_approx(person._cat_detour_depth) and is_equal_approx(person.position.z,person._wait_z()),"Waiting challenge guest returns to the counter")
+ cat.show();person.is_waiting=false;person._cat_detour_depth=0
+ person.position=Vector3(-3.4,person.STAND_Y,person._wait_z())
+ for frame in 40:
+  var old_x=person.position.x
+  person.position.x+=.35
+  person._avoid_visiting_cat(.1,old_x)
+  assert(Vector2(person.position.x-cat.position.x,person.position.z-cat.position.z).length()>=1.44,"Running customer must never cross the cat clearance")
+ assert(person.position.x>3,"Detour must still let the customer pass")
  print("TAKEOUT_AND_CAT_OK")
  game.queue_free();await process_frame;quit()

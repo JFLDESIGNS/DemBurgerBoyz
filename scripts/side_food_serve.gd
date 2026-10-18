@@ -30,7 +30,7 @@ func setup(owner_game: Node, eater: Node3D, model: Node3D, food_kind: String, ca
  add_to_group("side_food_presentations")
  start_position=food.global_position
  source_scale=food.scale
- hand_size=2.0 if kind=="fries" else 1.4
+ hand_size=1.4
  if kind=="fries":
   fries=food.find_child("FriesShakeRoot",true,false)
   if is_instance_valid(fries):

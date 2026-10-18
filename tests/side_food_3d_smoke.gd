@@ -35,6 +35,7 @@ func run():
  eater.set_meta("burger_in_flight",false)
  await create_timer(1.35).timeout
  assert(eater.starts==1 and callbacks[0]==0)
+ assert(is_equal_approx(fries.scale.x,game.fries_ready_pack_scale*1.4),"Held fries use the smaller size")
  var pile=fries.find_child("FriesShakeRoot",true,false)
  var original_materials={}
  for mesh in pile.find_children("*","MeshInstance3D",true,false):
