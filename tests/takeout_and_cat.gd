@@ -100,6 +100,7 @@ func run():
  assert(mobile.try_seal_bag() and mobile.state.phase=="sealed")
  mobile.update_visuals(0)
  assert(not mobile.car.visible and not mobile.courier.visible,"Walk-up orders must never summon a driver")
+ assert(mobile.bag_ticket.visible and not mobile.flying_ticket.visible,"Takeout handoff shows only the ticket attached to the bag")
  var before_money=game.money
  mobile.pay_order();var after_money=game.money;mobile.pay_order()
  assert(after_money>before_money and game.money==after_money,"Takeout pays once")

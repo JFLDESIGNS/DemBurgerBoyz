@@ -680,7 +680,8 @@ func update_visuals(_delta: float) -> void:
  elif phase=="pickup":bag.position=ledge.position+Vector3(0,.05,0)
  elif phase=="collected":bag.position=courier_carry_position()
  bag_ticket.visible=phase in ["pickup","collected"] or (phase=="sealed" and age>=.7)
- flying_ticket.visible=phase=="sealed" and age<.7
+ # Walk-up takeout carries its attached ticket from the start of the handoff.
+ flying_ticket.visible=phase=="sealed" and age<.7 and not bool(state.get("takeout",false))
  if phase=="sealed":
   flying_ticket.position=ticket_flight_start.lerp(props.to_local(bag_ticket.global_position),clampf(age/.7,0,1))
  car.visible=phase in ["pickup","collected"];courier.visible=car.visible
