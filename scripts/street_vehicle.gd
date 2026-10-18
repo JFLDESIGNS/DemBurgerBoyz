@@ -18,6 +18,11 @@ var model_bounds: Array[AABB] = []
 var variant_index: int = -1
 var _material_colors: Array = []
 var _darken: float = -1.0
+var suspension := 0.0
+var suspension_velocity := 0.0
+var road_distance := 0.0
+var bodies: Array[Node3D] = []
+var body_rest: Array[Transform3D] = []
 var contact_shadow: MeshInstance3D
 
 func set_pool(packed_scenes: Array, spread_frames: bool = false) -> void:
@@ -30,6 +35,11 @@ func set_pool(packed_scenes: Array, spread_frames: bool = false) -> void:
 		add_child(model)
 		model.visible = false
 		models.append(model)
+		var body: Node3D = null
+		for item in model.find_children("*", "Node3D", true, false):
+			if String(item.name).ends_with("Body"): body = item; break
+		bodies.append(body)
+		body_rest.append(body.transform if body != null else Transform3D.IDENTITY)
 		if spread_frames: await get_tree().process_frame
 		var mesh_count := 0
 		for item in model.find_children("*", "MeshInstance3D", true, false):
@@ -90,8 +100,12 @@ func set_variant(index: int) -> void:
 	reset_pose()
 
 func reset_pose() -> void:
+	suspension = 0.0
+	suspension_velocity = 0.0
+	road_distance = 0.0
 	if variant_index < 0:
 		return
+	if is_instance_valid(bodies[variant_index]): bodies[variant_index].transform = body_rest[variant_index]
 	var player := players[variant_index]
 	if player != null and player.has_animation(DRIVE_CLIP):
 		player.play(DRIVE_CLIP)
@@ -107,11 +121,32 @@ func advance_driving(delta: float, world_speed: float) -> void:
 	if variant_index < 0 or delta <= 0.0 or world_speed <= 0.0:
 		return
 	var player := players[variant_index]
+	if is_instance_valid(bodies[variant_index]): bodies[variant_index].transform = body_rest[variant_index]
 	if player == null:
 		return
 	# Authored clip rolls four turns over two seconds. Match contact speed after scaling.
 	var reference_speed: float = WHEEL_RADII[variant_index] * TAU * 2.0 * absf(scale.x)
 	player.advance(delta * world_speed / maxf(reference_speed, 0.001))
+	# Distance-driven road ripples excite a damped suspension; tires stay grounded.
+	var remaining := minf(delta, .1)
+	while remaining > 0.0:
+		var dt := minf(remaining, 1.0/120.0)
+		road_distance += world_speed * dt
+		var road := sin(road_distance*.8)*.045 + sin(road_distance*1.7)*.018
+		suspension_velocity += ((road-suspension)*95.0-suspension_velocity*9.0)*dt
+		suspension += suspension_velocity*dt
+		remaining -= dt
+	var body := bodies[variant_index]
+	if is_instance_valid(body):
+		body.position.y += suspension
+		body.rotation.z += clampf(-suspension_velocity*.09,-.055,.055)
+		body.rotation.x += sin(road_distance*.28)*.035
+
+func road_lane_offset(x: float) -> float:
+	return sin(x*.23)*.14
+
+func steer_on_road(direction: float, x: float) -> void:
+	rotation.y = (0.0 if direction>0.0 else PI)-atan(.14*.23*cos(x*.23))
 
 func set_darken(value: float) -> void:
 	value = clampf(value, 0.0, 0.7)

@@ -64,6 +64,19 @@ func _run() -> void:
 		actor.advance_driving(0.01, speed)
 		check(absf(before_scaled.angle_to(wheels[0].quaternion) - TAU * 2.0 * 0.02) < 0.025, "Wheel speed ignores model scale")
 		actor.scale = Vector3.ONE
+	# Suspension should stay bounded and give the same result at different frame rates.
+	actor.set_variant(0)
+	for frame in 120: actor.advance_driving(1.0/60.0,12.0)
+	var sixty: float = actor.suspension
+	actor.reset_pose()
+	for frame in 60: actor.advance_driving(1.0/30.0,12.0)
+	check(absf(sixty-actor.suspension)<.002,"Suspension depends on frame rate")
+	check(absf(actor.suspension)<.12,"Suspension escaped its travel limits")
+	for direction in [-1.0,1.0]:
+		actor.steer_on_road(direction,3.0)
+		var forward: Vector3=actor.basis*Vector3.RIGHT
+		var tangent:=Vector3(direction,0,direction*.14*.23*cos(3.0*.23)).normalized()
+		check(forward.dot(tangent)>.999,"Steering does not follow road path")
 	var peak_switch_usec:=0
 	for iteration in 100:
 		var began:=Time.get_ticks_usec()

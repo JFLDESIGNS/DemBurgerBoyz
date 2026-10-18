@@ -3633,6 +3633,7 @@ func _update_shift_clock(delta: float, intro_blocking: bool = false) -> void:
 
 
 func _ready() -> void:
+	add_child(preload("res://scripts/day_one_burger_coach.gd").new())
 	_ensure_hotdog_challenge()
 	randomize()
 	_seed_first_run_configs()
@@ -31166,7 +31167,8 @@ func _update_street_car(delta: float) -> void:
 	var world_speed := street_car_speed * clampf(_gfx_float("street_car_speed", 1.0), 0.35, 2.5)
 	street_car.position.x += street_car_direction * world_speed * delta
 	street_car.position.y = street_car_base_y
-	street_car.position.z = _street_car_z()
+	street_car.position.z = _street_car_z() + street_car.road_lane_offset(street_car.position.x)
+	street_car.steer_on_road(street_car_direction, street_car.position.x)
 	street_car.advance_driving(delta, world_speed)
 	_play_street_car_whoosh_if_passing()
 	_update_street_car_exhaust_position()
