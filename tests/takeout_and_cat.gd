@@ -11,6 +11,10 @@ func run():
  var phone=VBoxContainer.new();game.get_node("UI/Root").add_child(phone)
  var mobile=load("res://scripts/grubbah.gd").new();game.add_child(mobile);mobile.set_process(false);game._grubbah=mobile;mobile.setup(game,phone)
  mobile.state={"number":3,"items":["bun_bottom","patty","bun_top","fries","soda_cola"],"phase":"accepted","base":20}
+ for frame in 101:
+  var point=mobile.pickup_bag_position(frame/100.0,Vector3(0,1,0),Vector3(2,1.4,2))
+  assert(point.y<=1.5,"Bag must stay on the lowered bunting-clearance arc")
+ assert(mobile.pickup_bag_position(1.0,Vector3.ZERO,Vector3.ONE).is_equal_approx(Vector3.ONE))
  mobile.refresh();mobile.auto_lay_paper();assert(mobile.state.phase=="paper","Selecting the mobile ticket lays paper automatically")
  var owner=mobile.ticket_owner
  # An uncrowned toasted burger must pass the same virtual-crown check as raw buns.

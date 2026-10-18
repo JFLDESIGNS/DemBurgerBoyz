@@ -772,7 +772,7 @@ func burger_bag_position(t: float, start: Vector3, mouth: Vector3) -> Vector3:
 func pickup_bag_position(t: float, start: Vector3, finish: Vector3) -> Vector3:
  if t<.12:return start
  var u=clampf((t-.12)/.64,0,1)
- return start.lerp(finish,smoothstep(0,1,u))+Vector3(0,sin(u*PI)*.46,0)
+ return start.lerp(finish,smoothstep(0,1,u))+Vector3(0,sin(u*PI)*.10,0)
 
 func bag_impact(tapped: bool = false) -> void:
  bag_bounce_age=0.0
