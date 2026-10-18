@@ -11,6 +11,7 @@ func run():
  preload("res://scripts/customer_cash_sequence.gd").play(game,actor,false)
  await create_timer(.8).timeout
  assert(actor.get_meta("cash_released",false))
+ assert(actor.has_meta("cash_gaze_target"),"Look toward payment destination")
  assert(game._payment_bill_active.is_empty(),"Tip must wait for the second throw")
  await create_timer(.65).timeout
  assert(actor.get_meta("cash_sequence_playing",false),"Second payment gesture must still be playing")
@@ -19,7 +20,10 @@ func run():
  assert(game._payment_bill_active.size()==2,"Eight dollar tip releases two 3D bills")
  for i in 90:game._update_payment_bills(1.0/60.0)
  assert(game._tip_jar_bill_count==2,"Tip bills remain inside the jar")
- await create_timer(.5).timeout
+ await create_timer(.9).timeout
+ assert(actor.speech=="Thank you!" and actor.has_meta("cash_gaze_target"))
+ await create_timer(1.5).timeout
+ assert(not actor.has_meta("cash_gaze_target"))
  assert(not actor.get_meta("cash_sequence_playing",false))
  print("CASH_TWO_THROWS_AND_3D_TIPS_OK")
  quit()

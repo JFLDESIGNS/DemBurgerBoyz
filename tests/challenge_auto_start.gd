@@ -8,7 +8,12 @@ func run():
   for recipe in g._challenge_recipes:assert(recipe.count("patty") in [1,2],"Only single or double burgers")
   assert(g._challenge_count==g._challenge_recipes.size())
   assert(g._challenge_time_max==g._challenge_count*10.0)
+ g._build_challenge_ui()
  g._show_challenge_offer()
+ assert(g._challenge_phase=="offer" and g.spawned==0 and g.challenge_overlay.visible)
+ await create_timer(2.8).timeout
+ assert(g._challenge_phase=="offer" and g.spawned==0,"Ticket stays for three seconds")
+ await create_timer(.3).timeout
  assert(g._challenge_phase=="active" and g.spawned==1,"Challenge starts without an accept prompt")
  var c=load("res://scripts/customer.gd").new()
  var first:Array[String]=["bun_bottom","patty","bun_top"]

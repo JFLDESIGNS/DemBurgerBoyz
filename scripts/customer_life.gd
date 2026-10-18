@@ -136,7 +136,9 @@ func _process(delta: float) -> void:
 		if is_instance_valid(props): target = props.global_position
 	# Explicit social attention and taps take priority over idle looks.
 	var close_hand := target.is_finite() and target.distance_to(customer.global_position + Vector3(0, 1.3, 0)) < 1.65
-	var tracking := waiting and (idle_allows_gaze or tap_active or phone_active) and (gaze_left > 0.0 or looking_away or close_hand or tap_active or phone_active or forced_target.is_finite()) and target.is_finite()
+	var cash_target: Vector3=customer.get_meta("cash_gaze_target",Vector3.INF)
+	if cash_target.is_finite():target=cash_target
+	var tracking := cash_target.is_finite() or waiting and (idle_allows_gaze or tap_active or phone_active) and (gaze_left > 0.0 or looking_away or close_hand or tap_active or phone_active or forced_target.is_finite()) and target.is_finite()
 	gaze_strength = move_toward(gaze_strength, 1.0 if tracking else 0.0, delta * (28.0 if tap_active else 6.0))
 	if target.is_finite():
 		if not target_initialized: target_world = target; target_initialized = true
@@ -158,6 +160,7 @@ func _process(delta: float) -> void:
 		look.target_world = target_world
 		# Head and pupils share a smoothed target; phone clips keep their authored downward pose.
 		var head_goal := gaze_strength * (0.45 if phone_active else ((0.70 if forward else 0.58) if with_head or forced_target.is_finite() or tap_active else 0.0))
+		if cash_target.is_finite():head_goal=gaze_strength*.9
 		look.look_weight = move_toward(look.look_weight, head_goal, delta * 2.5)
 	# Quick lid closure and a slightly slower reopening, with independent clocks.
 	blink_wait -= delta

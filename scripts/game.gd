@@ -62933,6 +62933,7 @@ func _build_challenge_ui() -> void:
 	challenge_reward_label = reward
 
 	var row := HBoxContainer.new()
+	row.hide()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	row.add_theme_constant_override("separation", 14)
 	col.add_child(row)
@@ -63250,8 +63251,16 @@ func _show_challenge_offer() -> void:
 	_challenge_offer_id += 1
 	_challenge_decision_pending = false
 	_challenge_phase = "offer"
+	if is_instance_valid(challenge_body_label):challenge_body_label.text="Single and double burgers. Starting in 3 seconds!"
+	if is_instance_valid(challenge_count_stat):challenge_count_stat.text=str(_challenge_count)
+	if is_instance_valid(challenge_time_stat):challenge_time_stat.text=_challenge_clock_text(_challenge_time_max)
+	if is_instance_valid(challenge_reward_label):challenge_reward_label.text="Great cooking earns a better tip"
+	if is_instance_valid(challenge_overlay):challenge_overlay.show()
 	_play_challenge_song()
-	_accept_challenge()
+	_mp_send_challenge_state()
+	var intro_id: int=_challenge_offer_id
+	get_tree().create_timer(3.0).timeout.connect(func():
+		if _challenge_phase=="offer" and _challenge_offer_id==intro_id:_accept_challenge())
 
 
 func _accept_challenge() -> void:
@@ -63269,7 +63278,6 @@ func _accept_challenge() -> void:
 	_challenge_remaining = _challenge_count
 	_update_challenge_hud()
 	_spawn_challenge_customer()
-	_start_burger_pals_parade("challenge")
 	_flash("Follow each burger ticket — go!", Color("FFD54F"), 1.6)
 	_mp_send_challenge_state()
 
@@ -63323,7 +63331,7 @@ func mp_challenge_state(phase: String, count: int, remaining: int, time_left: fl
 	_apply_next_challenge_recipe()
 	if phase == "offer":
 		if challenge_body_label != null:
-			challenge_body_label.text = "One recipe. Beat the clock. Earn the bonus."
+			challenge_body_label.text = "Single and double burgers. Starting in 3 seconds!"
 		if challenge_count_stat != null:
 			challenge_count_stat.text = str(_challenge_count)
 		if challenge_time_stat != null:
@@ -63341,8 +63349,6 @@ func mp_challenge_state(phase: String, count: int, remaining: int, time_left: fl
 	_update_challenge_hud()
 	_refresh_challenge_ticket()
 
-	if phase == "active" and previous != "active":
-		call_deferred("_start_burger_pals_parade", "challenge")
 
 
 @rpc("any_peer", "call_remote", "reliable")

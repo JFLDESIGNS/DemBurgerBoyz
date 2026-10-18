@@ -11,11 +11,30 @@ static func play(game: Node, customer: Node3D, special: bool) -> void:
 		await _throw_payment(game,customer,false,true)
 	if not is_instance_valid(customer):return
 	customer._anim_player.stop();customer._anim_player.speed_scale=1.0;customer._reset_skeleton_pose()
-	customer._anim_state="";customer._play_anim("idle");customer.set_process(processing)
+	customer._anim_state="";customer._play_anim("idle")
+	var camera: Camera3D=game.get_viewport().get_camera_3d()
+	if is_instance_valid(camera):customer.set_meta("cash_gaze_target",camera.global_position)
+	await game.get_tree().create_timer(.35).timeout
+	if not is_instance_valid(customer):return
+	customer.say_line("Thank you!",1.25)
+	customer.set_meta("departure_thanks_checked",true)
+	if is_instance_valid(game.game_audio):game.game_audio.play_customer_wawa_click(.15,customer.get_customer_voice())
+	customer.animate_wawa(1.1,1.0)
+	await game.get_tree().create_timer(1.1).timeout
+	if not is_instance_valid(customer):return
+	customer.remove_meta("cash_gaze_target")
+	customer.set_process(processing)
 	customer.set_meta("cash_sequence_playing",false)
 
 static func _throw_payment(game: Node, customer: Node3D, special: bool, tip_throw: bool) -> void:
 	if not is_instance_valid(customer):return
+	var camera: Camera3D=game.get_viewport().get_camera_3d()
+	if tip_throw and is_instance_valid(game.tip_jar_root):
+		customer.set_meta("cash_gaze_target",game._tip_jar_mouth_global())
+	elif is_instance_valid(camera):
+		var screen: Vector2=game.get_viewport().get_visible_rect().size*Vector2(.92,.07)
+		if is_instance_valid(game.hud_money):screen=game.hud_money.get_global_rect().get_center()
+		customer.set_meta("cash_gaze_target",camera.project_position(screen,maxf(1.0,camera.global_position.distance_to(customer.global_position)*.6)))
 	customer._anim_player.stop()
 	customer._play_burger_clip("Grisaldi_Spin_Throw" if special else "Give_Money")
 	customer._anim_player.speed_scale=1.0 if special else 1.5
