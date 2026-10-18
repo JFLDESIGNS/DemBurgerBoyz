@@ -107,86 +107,12 @@ func run():
  for burger_count in [1,4]:
   mobile.state={};mobile.begin_takeout(person,burger_count)
   assert(mobile.state.recipes.size()==burger_count and mobile.state.burger_count==burger_count)
- # The mail cat must have a full walking clearance before the customer passes it.
- var mail=Node3D.new();game.add_child(mail)
- var cat=Node3D.new();mail.add_child(cat)
- # Use the actual mail truck script's courier field without its setup.
- mail.set_script(load("res://scripts/mail_delivery_truck.gd"));mail.courier=cat;mail.set_process(false)
- game.mail_delivery_truck=mail
- cat.position=Vector3(0,0,person._wait_z())
- person.position=Vector3(-3,person.STAND_Y,person._wait_z())
- person.target_x=4
- for frame in 180:
-  person.position.x+=1.6/60.0
-  person.position.z=person._wait_z() # Departure pose resets depth each frame.
-  person._avoid_visiting_cat(1.0/60.0)
-  if absf(person.position.x)<.5:assert(person.position.z-cat.position.z>.74,"Customer must clear the cat")
- # Reaching the counter X must not strand a waiting challenge guest behind the cat.
- person.position=Vector3(0,person.STAND_Y,person._wait_z()+1.45)
- person.target_x=0;person.is_waiting=true;person.is_challenge_guest=true;person._cat_detour_depth=1.45
- person._process(1.0/60.0)
- assert(person._cat_detour_depth>1.4,"Hold clearance while cat occupies the counter")
- var held_depth=person._cat_detour_depth
- cat.hide()
- person._process(1.0/60.0)
- assert(person._cat_detour_depth<held_depth and person._cat_detour_depth>0,"Start returning smoothly as soon as cat leaves")
- var bobble_before=person._bobble_phase
- for frame in 30:person._process(1.0/60.0)
- assert(person._bobble_phase>bobble_before+.5,"Forward walk visibly advances the bobble")
- assert(person._cat_detour_depth>1.0 and person._anim_state=="walk","Return uses a slower uninterrupted walking pose")
- for frame in 150:person._process(1.0/60.0)
- assert(is_zero_approx(person._cat_detour_depth) and is_equal_approx(person.position.z,person._wait_z()),"Waiting challenge guest returns to the counter")
- cat.show();person.is_waiting=false;person._cat_detour_depth=0;person.target_x=12
- person.position=Vector3(-3.4,person.STAND_Y,person._wait_z())
- for frame in 40:
-  var old_x=person.position.x
-  person.position.x+=.35
-  person._avoid_visiting_cat(.1,old_x)
-  assert(Vector2(person.position.x-cat.position.x,person.position.z-cat.position.z).length()>=.74,"Running customer must never cross the cat clearance")
- assert(person.position.x>3,"Detour must still let the customer pass")
- person.position=Vector3(cat.position.x,person.STAND_Y,cat.position.z+1.7)
- person._cat_detour_depth=1.7;person.is_waiting=true;person.target_x=cat.position.x
- for frame in 180:person._avoid_visiting_cat(1.0/60.0)
- assert(person.position.z-cat.position.z>.74 and person.position.z-cat.position.z<.91,"Wait close behind the mail cat")
- # Begging cat: meal-side and queue-forward movements must use the same clearance.
- mail.hide()
- var begging=Node3D.new();game.add_child(begging)
- begging.set_script(load("res://scripts/window_cat.gd"));begging.set_process(false)
- game.window_cat=begging
- begging.position=Vector3(0,.69,person.WAIT_Z+.2)
- person.is_leaving=false;person.is_waiting=true
- person.position=Vector3(1.1,person.STAND_Y,person.WAIT_Z)
- person.target_x=1.1;person._cat_detour_depth=0;person._meal_walk_active=false
- for frame in 120:person._avoid_visiting_cat(1.0/60.0)
- assert(is_equal_approx(person.position.z,person.WAIT_Z),"Cat beside a waiting customer must not push them backwards")
- person.position.x=3;person.target_x=1.1
- for frame in 100:
-  var previous_x=person.position.x
-  person.position.x=move_toward(person.position.x,person.target_x,.03)
-  person._avoid_visiting_cat(1.0/60.0,previous_x)
- assert(is_equal_approx(person.position.z,person.WAIT_Z),"A route ending beside the cat does not need a detour")
- for direction in [-1.0,1.0]:
-  person.position=Vector3(-3.4*direction,person.STAND_Y,person.WAIT_Z)
-  person.set_meta("meal_stepping_aside",true)
-  person.begin_meal_walk(3.4*direction,person.WAIT_Z)
-  for frame in 500:
-   person._update_meal_walk(1.0/60.0)
-   assert(Vector2(person.position.x-begging.position.x,person.position.z-begging.position.z).length()>=.89,"Meal walk must go around begging cat")
-   if not person._meal_walk_active:break
-  assert(absf(person.position.x-3.4*direction)<.02 and not person._meal_walk_active)
- person.position=Vector3(0,person.STAND_Y,person.WAIT_Z+3)
- person.set_meta("front_step_walking",true)
- person.begin_meal_walk(0,person.WAIT_Z)
- for frame in 250:
-  person._update_meal_walk(1.0/60.0)
-  assert(person.position.z-begging.position.z>=.89,"Queue advancement must stop behind begging cat")
-  if not person._meal_walk_active:break
- assert(person.position.z-begging.position.z<1.1,"Wait close behind the begging cat")
- begging.hide()
- person.begin_meal_walk(0,person.WAIT_Z)
- for frame in 250:
-  person._update_meal_walk(1.0/60.0)
-  if not person._meal_walk_active:break
- assert(is_equal_approx(person.position.z,person.WAIT_Z))
+ person.is_waiting=true;person.is_leaving=false
+ person.position=Vector3(-3,person.STAND_Y,person.WAIT_Z)
+ person.begin_meal_walk(3,person.WAIT_Z)
+ for frame in 400:
+  if person._meal_walk_active:person._update_meal_walk(1.0/60.0)
+  assert(is_equal_approx(person.position.z,person.WAIT_Z),"Customers keep a straight path; cats yield")
+ assert(not person._meal_walk_active and absf(person.position.x-3)<.01)
  print("TAKEOUT_AND_CAT_OK")
  game.queue_free();await process_frame;quit()

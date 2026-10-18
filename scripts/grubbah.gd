@@ -963,7 +963,7 @@ func begin_takeout(person: Node3D, count: int) -> void:
  var base: int=DATA.order_value(sides)
  var mixed: bool=count>1 and randf()<.65
  for i in count:
-  var recipe: Array=Array(DATA.generate_order(game.difficulty,false,false,false)) if mixed and i>0 else burger.duplicate()
+  var recipe: Array=Array(DATA.generate_order(game.difficulty,false,false,false,game.day>1)) if mixed and i>0 else burger.duplicate()
   recipes.append(recipe);all_items.append_array(recipe);base+=DATA.order_value(recipe)
  state={"number":next_number,"items":recipes[0]+sides,"recipes":recipes,"takeout_sides":sides,"all_ordered_items":all_items,"phase":"accepted","selected":false,"takeout":true,"customer_id":game._customer_net_id(person),"burger_count":count,"burgers_packed":0,"base":base,"paid":false,"quality":1.0,"driver_preset":person.get_custom_character_preset(),"driver_skin":0,"car_style":0}
  next_number+=1;age=0;publish()

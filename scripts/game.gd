@@ -21796,6 +21796,9 @@ func _try_start_pending_boss_pep() -> void:
 
 
 func _start_boss_pep_intro(visit_kind: String = "") -> void:
+	if day < 2:
+		_boss_fryer_pending = false
+		if visit_kind == "fryer": visit_kind = "pep"
 	if visit_kind.is_empty():
 		visit_kind = "fryer" if _boss_fryer_pending else "pep"
 	if mp_enabled and not _mp_applying:
@@ -21992,16 +21995,20 @@ func _on_cut_collector_arrived(customer: Node3D) -> void:
 			pep = BOSS_MORNING_PEPS[_boss_pep_index % BOSS_MORNING_PEPS.size()]
 			_boss_pep_index += 1
 			talk_time = 6.2
-			if day == 2 and not bool(owned_machines.get(SHOP_SODA_MACHINE, false)):
+			if day == 2 and not bool(owned_machines.get(SHOP_FRYER_MACHINE, false)):
+				pep = BOSS_FRYER_ADVICE
+				talk_time = 10.0
+				_boss_fryer_advice_queued = true
+			elif day == 3 and not bool(owned_machines.get(SHOP_SODA_MACHINE, false)):
 				pep = "A soda machine is $300 in the Shop. Upsell a cold drink with burgers and fries to grow each sale!"
 				talk_time = 10.0
-			elif day == 3 and not bool(owned_machines.get(SHOP_ICECREAM_MACHINE, false)):
+			elif day == 4 and not bool(owned_machines.get(SHOP_ICECREAM_MACHINE, false)):
 				pep = "An ice cream machine is $500 in the Shop. Offer dessert after a meal: another upsell, more profit!"
 				talk_time = 10.0
 		if kind == "fryer" and bool(owned_machines.get(SHOP_FRYER_MACHINE, false)):
 			pep = "Put that fryer to work! Offer fries with every burger. Upselling a side means more profit from each order."
-		if kind == "fryer" or (kind == "pep" and day in [2, 3]):
-			_show_boss_machine(SHOP_FRYER_MACHINE if kind == "fryer" else (SHOP_SODA_MACHINE if day == 2 else SHOP_ICECREAM_MACHINE), talk_time)
+		if kind == "fryer" or (kind == "pep" and day in [2, 3, 4]):
+			_show_boss_machine(SHOP_FRYER_MACHINE if kind == "fryer" else _boss_daily_machine(), talk_time)
 		_show_boss_caption("THE BOSS", pep, talk_time)
 
 		get_tree().create_timer(talk_time).timeout.connect(func():
@@ -22103,7 +22110,7 @@ func _record_boss_served_customer() -> void:
 	if tutorial_mode or not playing or (mp_enabled and not NetManager.is_host()):
 		return
 	_boss_fryer_served += 1
-	if _boss_fryer_served >= 3 and not _boss_fryer_advice_queued and not truck_bought_out and not bool(owned_machines.get(SHOP_FRYER_MACHINE, false)):
+	if day == 2 and _boss_fryer_served >= 3 and not _boss_fryer_advice_queued and not truck_bought_out and not bool(owned_machines.get(SHOP_FRYER_MACHINE, false)):
 		_boss_fryer_advice_queued = true
 		_boss_fryer_pending = true
 		_boss_pep_pending = true
@@ -31718,7 +31725,7 @@ func _update_background_hail(idx: int, delta: float) -> bool:
 		if mp_enabled and not NetManager.is_host(): return true
 		if _waiting_customer_count() >= MAX_CUSTOMERS or _challenge_blocks_spawns() or service_window_closed or day_time <= 0 or tutorial_mode or _bts_day_intro_active or _boss_intro_running: return true
 		var preset: Dictionary = walker.get_custom_character_preset()
-		var order = GameDataScript.generate_order(difficulty, false, false, false)
+		var order = GameDataScript.generate_order(difficulty, false, false, false, day > 1)
 		var nid = _mp_next_customer_net_id; _mp_next_customer_net_id += 1
 		var lane = clampi(_waiting_customer_count(),0,CustomerScript.LANE_X.size()-1)
 		var patience = float(_location_stats().get("patience_base",92.0))
@@ -63663,7 +63670,7 @@ func _spawn_customer(grisaldi_referral: bool = false) -> void:
 	var skin_idx := -1 if grisaldi_referral else _next_bts_day1_skin_idx()
 	var is_bts_guest := skin_idx >= 0
 	var order: Array[String] = _everything_burger_order() if is_bts_guest else GameDataScript.generate_order(
-		difficulty, _owns_soda_machine(), _owns_icecream_machine(), _owns_fryer_machine()
+		difficulty, _owns_soda_machine(), _owns_icecream_machine(), _owns_fryer_machine(), day > 1
 	)
 	var color: Color = GameDataScript.CUSTOMER_COLORS[randi() % GameDataScript.CUSTOMER_COLORS.size()]
 	var location_stats := _location_stats()
@@ -81922,3 +81929,18 @@ func mp_robot_cook_visual(id: String, station: int, source: Vector3, fork: Vecto
 	fx.game = self
 	add_child(fx)
 	fx.visual(id, station, source, fork)
+
+func _boss_daily_machine() -> String:
+	return {2: SHOP_FRYER_MACHINE, 3: SHOP_SODA_MACHINE, 4: SHOP_ICECREAM_MACHINE}.get(day, "")
+
+func customer_debris_targets() -> Array[Vector3]:
+	var points: Array[Vector3] = []
+	for pile in debris_piles:
+		var root: Node3D = pile.get("root")
+		if is_instance_valid(root) and root.is_visible_in_tree() and not pile.get("swallowing",false): points.append(root.global_position)
+	for i in mini(grill_residue.size(),grill_residue_centers.size()):
+		if float(grill_residue[i]) > .15:
+			var point: Vector3 = grill_residue_centers[i]
+			if is_instance_valid(grill_root): point = grill_root.to_global(point)
+			points.append(point)
+	return points

@@ -134,6 +134,11 @@ func _process(delta: float) -> void:
 	if phone_active and waiting:
 		var props: Node3D = customer.get("_burger_props")
 		if is_instance_valid(props): target = props.global_position
+	var debris_target := _debris_glance(delta, game, waiting and idle_allows_gaze and not phone_active and not tap_active and not forced_target.is_finite())
+	if debris_target.is_finite():
+		target = debris_target
+		with_head = false
+		gaze_left = maxf(gaze_left,.2)
 	# Explicit social attention and taps take priority over idle looks.
 	var close_hand := target.is_finite() and target.distance_to(customer.global_position + Vector3(0, 1.3, 0)) < 1.65
 	var cash_target: Vector3=customer.get_meta("cash_gaze_target",Vector3.INF)
@@ -200,3 +205,31 @@ func choose_away_target(player_target: Vector3) -> void:
 	var offset: Vector3 = AWAY_TARGETS[away_target_index]
 	offset += Vector3(rng.randf_range(-0.5, 0.5), rng.randf_range(-0.2, 0.3), rng.randf_range(-0.4, 0.4))
 	away_target = customer.global_position + side * offset.x + Vector3.UP * offset.y + forward * offset.z
+
+var debris_cooldown := 6.0
+var debris_watch_left := 0.0
+var debris_switch_left := 0.0
+var debris_last := Vector3.INF
+
+func _debris_glance(delta: float, game: Node, allowed: bool) -> Vector3:
+	debris_cooldown = maxf(0.0,debris_cooldown-delta)
+	if not allowed or not is_instance_valid(game) or not game.has_method("customer_debris_targets"):
+		debris_watch_left = 0.0
+		return Vector3.INF
+	if debris_watch_left<=0.0 and debris_cooldown>0.0: return Vector3.INF
+	var points: Array = game.customer_debris_targets()
+	if points.size()<3:
+		debris_watch_left=0.0
+		debris_cooldown=2.0
+		return Vector3.INF
+	if debris_watch_left<=0.0:
+		debris_watch_left=rng.randf_range(2.5,4.0)
+		debris_cooldown=rng.randf_range(8.0,14.0)
+		debris_switch_left=0.0
+	debris_watch_left-=delta
+	debris_switch_left-=delta
+	if debris_switch_left<=0.0 or not points.has(debris_last):
+		points.erase(debris_last)
+		debris_last=points[rng.randi_range(0,points.size()-1)]
+		debris_switch_left=rng.randf_range(.6,1.1)
+	return debris_last

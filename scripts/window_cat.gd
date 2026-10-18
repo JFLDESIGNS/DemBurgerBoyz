@@ -116,6 +116,7 @@ var _meow_elapsed: float = 0.0
 
 func _ready() -> void:
 	_build()
+	preload("res://scripts/cat_customer_hop.gd").attach(_visual)
 	position = Vector3(_home_x(), _hidden_y(), _home_z())
 	rotation_degrees = Vector3(0.0, FACE_COOK_YAW, 0.0)
 	_timer = FIRST_PEEK_SEC

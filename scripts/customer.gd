@@ -796,6 +796,7 @@ func _pick_annoying_line() -> String:
 
 
 func _ready() -> void:
+	add_to_group("cat_passing_customers")
 	_build()
 	add_child(preload("res://scripts/character_footsteps.gd").new())
 	_bounce = randf() * TAU
@@ -5399,65 +5400,18 @@ func stop_mouth_speech() -> void:
 
 var _cat_detour_depth: float = 0.0
 
-func _cat_walk_clearance(obstacle: Node3D, begging_cat: Node3D) -> float:
-	if obstacle == begging_cat:
-		return .9 * (begging_cat._size_mul()/begging_cat.DEFAULT_SIZE_MUL) * (1.0+float(begging_cat._fat)*.35)
-	return .75 # The mail courier is narrower than the begging cat.
-
 func _apply_forward_walk_bobble(delta: float) -> void:
 	_bobble_phase += delta * 9.0
 	if not is_instance_valid(_body): return
 	_body.position.y = _base_body_y + sin(_bobble_phase) * .025
 	_body.rotation_degrees = Vector3(0, 0, sin(_bobble_phase*.5)*1.4)
 
-func _cat_blocks_walk(obstacle: Node3D, radius: float, previous_x: float) -> bool:
-	var baseline := _wait_z() + (_service_backstep if is_leaving else 0.0)
-	var from_x := previous_x if is_finite(previous_x) else global_position.x
-	var goal_x := LEAVE_OFFSCREEN_X if is_leaving else target_x
-	var moving_sideways := absf(goal_x-from_x) > .05 or absf(global_position.x-from_x) > .001
-	var center := Vector2(obstacle.global_position.x, obstacle.global_position.z)
-	if moving_sideways:
-		var nearest := Geometry2D.get_closest_point_to_segment(center, Vector2(from_x, baseline), Vector2(goal_x, baseline))
-		return nearest.distance_to(center) < radius
-	# Only retain clearance when an existing detour/forward walk would cross the cat.
-	# A cat appearing beside a stationary customer must not push them backwards.
-	if _cat_detour_depth > .01 or _meal_walk_active:
-		var nearest := Geometry2D.get_closest_point_to_segment(center, Vector2(global_position.x, global_position.z), Vector2(goal_x, baseline))
-		return nearest.distance_to(center) < radius
-	return false
-
-func _avoid_visiting_cat(delta: float, previous_x: float = INF) -> void:
-	if mp_host_driven: return
-	var game = get_tree().current_scene
-	if not is_instance_valid(game): return
-	var cats: Array = []
-	var cat = game.get("window_cat")
-	if is_instance_valid(cat): cats.append(cat)
-	var mail = game.get("mail_delivery_truck")
-	if is_instance_valid(mail) and is_instance_valid(mail.get("courier")): cats.append(mail.courier)
-	var target_z := _wait_z() + (_service_backstep if is_leaving else 0.0)
-	for obstacle in cats:
-		if not obstacle.is_visible_in_tree(): continue
-		var radius: float = _cat_walk_clearance(obstacle, cat)
-		if not _cat_blocks_walk(obstacle, radius, previous_x): continue
-		var gap: float = absf(global_position.x-obstacle.global_position.x)
-		if gap < radius+.9 and absf(_wait_z()-obstacle.global_position.z)<radius:
-			var amount: float = 1.0-smoothstep(radius*.7,radius+.9,gap)
-			target_z=maxf(target_z,lerpf(_wait_z(),obstacle.global_position.z+radius+.12,amount))
-	var baseline: float = _wait_z()+(_service_backstep if is_leaving else 0.0)
-	var return_speed: float=.75 if is_waiting and not is_leaving and target_z-baseline<_cat_detour_depth else 3.5
-	_cat_detour_depth=move_toward(_cat_detour_depth,target_z-baseline,delta*return_speed)
+func _avoid_visiting_cat(delta: float, _previous_x: float = INF) -> void:
+	# Cats yield now; customers stay in their lane and smoothly advance in the queue.
+	if mp_host_driven:return
+	var baseline := _wait_z()+(_service_backstep if is_leaving else 0.0)
+	_cat_detour_depth=move_toward(_cat_detour_depth,0.0,delta*.75)
 	global_position.z=baseline+_cat_detour_depth
-	# A moving cat can enter the route after the detour starts. Hold horizontal
-	# progress until there is room, rather than letting a fast customer cut through.
-	if is_finite(previous_x):
-		for obstacle in cats:
-			if not obstacle.is_visible_in_tree():continue
-			var clearance: float = _cat_walk_clearance(obstacle, cat)
-			var offset: Vector2=Vector2(global_position.x-obstacle.global_position.x,global_position.z-obstacle.global_position.z)
-			if offset.length()<clearance:
-				global_position.x=previous_x
-				if is_leaving:_leave_walk_x=previous_x
 
 func pet_cat() -> void:
 	if _eating or is_leaving or is_ragdoll or not is_waiting or not is_instance_valid(_anim_player): return

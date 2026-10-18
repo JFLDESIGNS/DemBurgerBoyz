@@ -70,6 +70,7 @@ func _ready() -> void:
 	add_child(courier)
 	cat_visual = CAT.instantiate()
 	courier.add_child(cat_visual)
+	preload("res://scripts/cat_customer_hop.gd").attach(cat_visual)
 	preload("res://scripts/cat_appearance.gd").apply_fur(cat_visual)
 	for eye_name in ["Cat_Eye_L", "Cat_Eye_R"]:
 		var eye = cat_visual.find_child(eye_name, true, false)

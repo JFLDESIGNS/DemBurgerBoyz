@@ -218,7 +218,8 @@ static func generate_order(
 	difficulty: float = 0.0,
 	allow_soda: bool = true,
 	allow_icecream: bool = true,
-	allow_fries: bool = true
+	allow_fries: bool = true,
+	allow_toasted_buns: bool = true
 ) -> Array[String]:
 	## Occasional drink-only ticket.
 	if allow_soda and randf() < SODA_ONLY_CHANCE:
@@ -256,7 +257,7 @@ static func generate_order(
 		## Tickets always list toppings in the same kitchen order.
 		order.append_array(sort_toppings(picked))
 		order.append("bun_top")
-	if randf() < 0.20:
+	if allow_toasted_buns and randf() < 0.20:
 		order.append("toasted_bun")
 	## Chance the burger comes with a fountain drink.
 	var soda_chance := SODA_WITH_BURGER_CHANCE + difficulty * 0.12
