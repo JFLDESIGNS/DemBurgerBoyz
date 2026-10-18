@@ -5,18 +5,27 @@ static func play(game: Node, customer: Node3D, special: bool) -> void:
 	customer.set_meta("cash_sequence_playing",true)
 	var processing := customer.is_processing()
 	customer.set_process(false)
+	await _throw_payment(game,customer,special,false)
+	if is_instance_valid(customer) and float(customer.get_meta("cash_tip_amount",0))>0:
+		await game.get_tree().create_timer(.16).timeout
+		await _throw_payment(game,customer,false,true)
+	if not is_instance_valid(customer):return
+	customer._anim_player.stop();customer._anim_player.speed_scale=1.0;customer._reset_skeleton_pose()
+	customer._anim_state="";customer._play_anim("idle");customer.set_process(processing)
+	customer.set_meta("cash_sequence_playing",false)
+
+static func _throw_payment(game: Node, customer: Node3D, special: bool, tip_throw: bool) -> void:
+	if not is_instance_valid(customer):return
 	customer._anim_player.stop()
 	customer._play_burger_clip("Grisaldi_Spin_Throw" if special else "Give_Money")
 	customer._anim_player.speed_scale=1.0 if special else 1.5
 	await game.get_tree().create_timer(1.95 if special else .85/1.5).timeout
 	if not is_instance_valid(customer):return
 	if is_instance_valid(customer._burger_props):customer._burger_props.hide()
-	fly_to_hud(game,customer,special)
+	if tip_throw:
+		game._fly_pay_bills_to_tip_jar(customer,clampi(int(ceil(float(customer.get_meta("cash_tip_amount",0))/4.0)),1,4))
+	else:fly_to_hud(game,customer,special)
 	await game.get_tree().create_timer(.65 if special else .75/1.5).timeout
-	if not is_instance_valid(customer):return
-	customer._anim_player.stop();customer._anim_player.speed_scale=1.0;customer._reset_skeleton_pose()
-	customer._anim_state="";customer._play_anim("idle");customer.set_process(processing)
-	customer.set_meta("cash_sequence_playing",false)
 
 static func story(game: Node, customer: Node3D) -> void:
 	if DisplayServer.get_name()=="headless":return
@@ -46,11 +55,9 @@ static func story(game: Node, customer: Node3D) -> void:
 
 static func fly_to_hud(game: Node, customer: Node3D, _special: bool) -> void:
 	customer.set_meta("cash_released",true)
-	var amount := float(customer.get_meta("cash_payment_amount",0))
+	var amount := maxf(0,float(customer.get_meta("cash_payment_amount",0))-float(customer.get_meta("cash_tip_amount",0)))
 	if amount <= 0:return
-	var tip := clampf(float(customer.get_meta("cash_tip_amount",0)),0,amount)
-	var count := clampi(int(ceil(amount/4.0)),2 if tip>0 and tip<amount else 1,18)
-	var tip_count := clampi(int(round(count*tip/amount)),1,count-1) if tip>0 and tip<amount else (count if tip>=amount else 0)
+	var count := clampi(int(ceil(amount/4.0)),1,18)
 	if is_instance_valid(game.game_audio):game.game_audio.play_customer_cash_chaching()
 	var viewport: Viewport=game.get_viewport()
 	var camera: Camera3D=viewport.get_camera_3d()
@@ -65,11 +72,8 @@ static func fly_to_hud(game: Node, customer: Node3D, _special: bool) -> void:
 	var start := camera.unproject_position(hand)
 	var target := viewport.get_visible_rect().size*Vector2(.92,.07)
 	if is_instance_valid(game.hud_money):target=game.hud_money.get_global_rect().get_center()
-	var jar_target := target
-	if is_instance_valid(game.tip_jar_root):jar_target=camera.unproject_position(game.tip_jar_root.global_position+Vector3(0,.08,0))
 	for i in count:
-		var is_tip := i>=count-tip_count
-		var destination := jar_target if is_tip else target
+		var destination := target
 		var bill := TextureRect.new();bill.texture=game._make_tip_bill_texture()
 		bill.expand_mode=TextureRect.EXPAND_IGNORE_SIZE;bill.size=Vector2(68,34)
 		bill.pivot_offset=bill.size*.5;bill.mouse_filter=Control.MOUSE_FILTER_IGNORE
@@ -83,8 +87,6 @@ static func fly_to_hud(game: Node, customer: Node3D, _special: bool) -> void:
 			bill.scale=Vector2.ONE*lerpf(1.0,.3,t)
 			bill.modulate.a=1.0-smoothstep(.8,1.0,t)
 		,0.0,1.0,1.0)
-	if tip_count>0 and is_instance_valid(game.tip_jar_root):
-		var label := Label.new();label.text="TIP +$%d" % int(tip);label.add_theme_color_override("font_color",Color("ffd56a"));label.add_theme_font_size_override("font_size",20);label.mouse_filter=Control.MOUSE_FILTER_IGNORE;layer.add_child(label);label.position=jar_target+Vector2(-40,-35)
 	var cleanup := layer.create_tween();cleanup.tween_interval(1.05+(count-1)*.13)
 	cleanup.tween_callback(func():
 		if is_instance_valid(game.hud_money):game._punch_hud_money()

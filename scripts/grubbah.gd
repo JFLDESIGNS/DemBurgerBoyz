@@ -232,7 +232,7 @@ func _process(delta: float) -> void:
    elif phase=="sealed" and age>=BAG_PICKUP_FLIGHT:
     if bool(state.get("takeout",false)):pay_order();set_phase("takeout_paid")
     else:set_phase("pickup")
-   elif phase=="takeout_paid" and age>=1.2:set_phase("takeout_leave")
+   elif phase=="takeout_paid" and age>=2.6:set_phase("takeout_leave")
    elif phase=="takeout_leave" and age>=4.0:
     finish_takeout_review();state={};wait_time=randf_range(55,110);publish()
    elif phase=="pickup" and age>=DRIVER_APPROACH+DRIVER_WALK+DRIVER_GRAB:

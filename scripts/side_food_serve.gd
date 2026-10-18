@@ -35,17 +35,6 @@ func setup(owner_game: Node, eater: Node3D, model: Node3D, food_kind: String, ca
   if is_instance_valid(fries):
    fries_scale=fries.scale
    fries_position=fries.position
-   var bounds:AABB=game._mesh_aabb_local(food)
-   for mesh in fries.find_children("*","MeshInstance3D",true,false):
-    if mesh.mesh==null:continue
-    var old:Material=mesh.get_active_material(0)
-    var tint:=Color(1,.75,.13)
-    var texture:Texture2D
-    if old is StandardMaterial3D:
-     tint=old.albedo_color
-     texture=old.albedo_texture
-    var ink:=_bite_material(tint,texture,bounds)
-    mesh.material_override=ink
 
  elif kind=="icecream":
   cone_bounds=game._mesh_aabb_local(food)
@@ -145,11 +134,9 @@ func _process(delta: float) -> void:
    if game.game_audio and game.game_audio.has_method("play_burger_chomp"):game.game_audio.play_burger_chomp()
  if kind=="fries":
   if is_instance_valid(fries):
-   # Clip eaten portions in place; never push geometry through the carton.
-   var food_inverse:=food.global_transform.affine_inverse()
-   for ink in bite_materials:
-    ink.set_shader_parameter("food_inverse",food_inverse)
-    ink.set_shader_parameter("consumed",float(bites)/3.0)
+   # Preserve the prepared food material, salt and warm lighting through flight
+   # and eating. Shorten the fries above their base as portions are eaten.
+   fries.scale=fries_scale*Vector3(1,maxf(.01,1.0-float(bites)/3.0),1)
    if bites>=3:fries.hide()
  elif kind=="icecream":
   var food_inverse:=food.global_transform.affine_inverse()

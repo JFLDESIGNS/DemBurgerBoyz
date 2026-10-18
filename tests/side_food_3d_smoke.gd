@@ -36,10 +36,15 @@ func run():
  await create_timer(1.35).timeout
  assert(eater.starts==1 and callbacks[0]==0)
  var pile=fries.find_child("FriesShakeRoot",true,false)
+ var original_materials={}
+ for mesh in pile.find_children("*","MeshInstance3D",true,false):
+  if mesh.mesh!=null:original_materials[mesh]=mesh.get_active_material(0)
  var pile_position=pile.position
  var pile_scale=pile.scale
  await create_timer(1.1).timeout
- assert(pile.position.is_equal_approx(pile_position) and pile.scale.is_equal_approx(pile_scale),"Eating fries must not sink through the carton")
+ assert(pile.position.is_equal_approx(pile_position) and pile.scale.y < pile_scale.y,"Eating shortens fries without moving their base")
+ for mesh in pile.find_children("*","MeshInstance3D",true,false):
+  if mesh.mesh!=null:assert(mesh.get_active_material(0)==original_materials[mesh],"Fries retain their original food shading")
  await create_timer(5.0).timeout
  assert(callbacks[0]==2 and eater.starts==2 and eater.finishes==2)
  assert(eater.get_meta("side_food_pending")==0)

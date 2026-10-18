@@ -37899,7 +37899,7 @@ func _serve_held_fries_pack(customer: Node3D) -> void:
 		game_audio.play_serve_whoosh()
 	if served_root != null and is_instance_valid(served_root):
 		customer.set_meta("fries_visual_started", true)
-		_start_side_food_3d(customer, "fries", served_root.global_position, func() -> void: pass)
+		_start_side_food_3d(customer, "fries", served_root.global_position, func() -> void: pass, "cola", 0.0, false, served_root)
 		served_root.queue_free()
 	if mp_enabled and NetManager.is_host():
 		_mp_broadcast_customers()
@@ -49303,6 +49303,7 @@ func _tip_pay_start_global(customer: Node3D) -> Vector3:
 
 
 func _on_tip_bill_landed(bill: MeshInstance3D) -> void:
+	if is_instance_valid(bill) and bool(bill.get_meta("tip_ping",false)) and is_instance_valid(game_audio):game_audio.play_tip_jar_ping()
 	if bill != null and is_instance_valid(bill):
 		if bill.has_meta("payment_bill_tween"):
 			bill.remove_meta("payment_bill_tween")
@@ -49331,6 +49332,7 @@ func _fly_pay_bills_to_tip_jar(customer: Node3D, count: int) -> void:
 		var bill: MeshInstance3D = _acquire_payment_bill(1.615, i, "TipFlyBill")
 		if bill == null:
 			continue
+		bill.set_meta("tip_ping",i==0)
 		bill.sorting_offset = 22.0
 		var jitter := Vector3(randf_range(-0.04, 0.04), randf_range(0.0, 0.06), randf_range(-0.03, 0.03))
 		var start_p: Vector3 = from + jitter

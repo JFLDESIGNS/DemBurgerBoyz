@@ -1478,7 +1478,7 @@ func play_fridge_open() -> void:
 
 func play_tip_jar_ping() -> void:
 	## Finger tap on the glass jar.
-	_play_cached("tip_jar_ping_%d" % (randi() % 3), _make_tip_jar_ping, 0.92 + randf() * 0.16, 0.88)
+	_play_cached("tip_jar_ping_%d" % (randi() % 3), _make_tip_jar_ping, 0.92 + randf() * 0.16, 0.44)
 
 
 func play_shaker_tap_crash() -> void:
