@@ -22,7 +22,23 @@ func run():
  assert(not driver.state.cat_blocked and driver.age>stop)
  assert(driver.publications==2,"Only publish block/unblock transitions")
  driver.car=Node3D.new();g.add_child(driver.car)
+ for endpoints in [Vector2(-9,10),Vector2(10,24)]:
+  for t in [.1,.3,.5,.75,.95]:
+   driver._pose_driver_car(t-.0001,endpoints.x,endpoints.y)
+   var before=driver.car.position
+   driver._pose_driver_car(t+.0001,endpoints.x,endpoints.y)
+   var after=driver.car.position
+   driver._pose_driver_car(t,endpoints.x,endpoints.y)
+   var forward=driver.car.basis.x;forward.y=0;forward=forward.normalized()
+   assert(forward.dot((after-before).normalized())>.999,"Car nose must follow its actual driving direction")
+  for t in [0.0,1.0]:
+   driver._pose_driver_car(t,endpoints.x,endpoints.y)
+   assert(absf(driver.car.rotation.y)<.001 and absf(driver.car.rotation.x)<.001,"Car parks straight")
  driver._pose_driver_car(.3,-9,10)
- assert(absf(driver.car.position.z-(g.STREET_CAR_Z+.45))>.2)
+ assert(absf(driver.car.rotation.y)>.1,"Visible steering through the swerve")
+ driver._pose_driver_car(.1,-9,10)
+ var first_distance=driver.car.position.x+9
+ driver._pose_driver_car(.9,-9,10)
+ assert(10-driver.car.position.x<first_distance*.2,"Approach slows before stopping")
  print("GROOBER_CAT_WAIT_OK")
  quit()

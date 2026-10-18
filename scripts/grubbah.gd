@@ -1,6 +1,6 @@
 extends Node
 # Host-owned mobile fulfillment. Visuals are reconstructed from a revisioned snapshot.
-const DRIVER_APPROACH = 1.0
+const DRIVER_APPROACH = 1.8
 const DRIVER_RUN = 1.35
 const DRIVER_SLIDE = .55
 const DRIVER_FACE = .20
@@ -15,7 +15,7 @@ const DRIVER_GRAB = .65
 const DRIVER_GRAB_SPEED = 1.1 / DRIVER_GRAB
 const DRIVER_RETREAT = .48
 const DRIVER_TURN = .22
-const DRIVER_EXIT = .85
+const DRIVER_EXIT = 1.15
 const DATA = preload("res://scripts/game_data.gd")
 const PACK = "res://models/burgerpack/try2/"
 var game: Node
@@ -891,13 +891,23 @@ func courier_carry_position() -> Vector3:
   if hand>=0:return props.to_local(skeleton.to_global(skeleton.get_bone_global_pose(hand).origin))-Vector3(0,.30,0)
  return props.to_local(courier.to_global(Vector3(.26,.85,.05)))
 
+func _driver_car_path(u: float, from_x: float, to_x: float) -> Vector3:
+ # One out-and-back steering correction, with zero sideways slope at each end.
+ var weave := .85 * sin(TAU*u) * pow(sin(PI*u), 2.0)
+ return Vector3(lerpf(from_x,to_x,u),car_ground_y,game.STREET_CAR_Z+.45+weave)
+
 func _pose_driver_car(t: float, from_x: float, to_x: float) -> void:
- # Deterministic from replicated phase age; settles straight at either endpoint.
- var envelope := sin(PI * t)
- var weave := .9 * sin(t * TAU * 1.5) * envelope
- car.position = Vector3(lerpf(from_x, to_x, t), car_ground_y, game.STREET_CAR_Z + .45 + weave)
- car.rotation.y = .28 * sin(t * TAU * 1.5 + PI * .5) * envelope
- car.rotation.z = -.055 * sin(t * TAU * 1.5) * envelope
+ # Replicated phase time drives both position and heading; the model faces +X.
+ t=clampf(t,0.0,1.0)
+ var arriving := from_x < 0.0
+ var u := 1.0-pow(1.0-t,2.0) if arriving else t*t
+ car.position=_driver_car_path(u,from_x,to_x)
+ var slope := .85*(TAU*cos(TAU*u)*pow(sin(PI*u),2.0)+PI*sin(TAU*u)*sin(TAU*u))
+ car.rotation.y=-atan2(slope,to_x-from_x)
+ # Gentle body roll about the car's length, instead of pitching its nose sideways.
+ var curvature := .85*PI*PI*(8.0*cos(PI*u)*sin(PI*u)*cos(TAU*u)-4.0*pow(sin(PI*u),2.0)*sin(TAU*u)+2.0*sin(TAU*u)*cos(TAU*u))
+ car.rotation.x=clampf(curvature*.0015,-.025,.025)*sin(PI*u)
+ car.rotation.z=0.0
 
 func _add_driver_roof_sign() -> void:
  var bounds: AABB = game._shop_preview_bounds(car)
