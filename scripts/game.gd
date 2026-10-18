@@ -63212,17 +63212,9 @@ func _refresh_challenge_ticket(customer: Node3D = null) -> void:
 
 
 func _pick_challenge_size() -> void:
-	var want_large := randf() < 0.5
-	if day_time + 8.0 < challenge_time_large:
-		want_large = false
-	if want_large:
-		_challenge_count = challenge_count_large
-		_challenge_time_max = challenge_time_large
-		_challenge_bonus_tip = challenge_tip_large
-	else:
-		_challenge_count = challenge_count_small
-		_challenge_time_max = challenge_time_small
-		_challenge_bonus_tip = challenge_tip_small
+	_challenge_count = randi_range(5,10)
+	_challenge_time_max = float(_challenge_count)*10.0
+	_challenge_bonus_tip = challenge_tip_large if _challenge_count>=8 else challenge_tip_small
 	_challenge_remaining = _challenge_count
 	_challenge_time_left = _challenge_time_max
 
@@ -63252,18 +63244,8 @@ func _show_challenge_offer() -> void:
 	_challenge_offer_id += 1
 	_challenge_decision_pending = false
 	_challenge_phase = "offer"
-	if challenge_body_label != null and is_instance_valid(challenge_body_label):
-		challenge_body_label.text = "One recipe. Beat the clock. Earn the bonus."
-	if challenge_count_stat != null and is_instance_valid(challenge_count_stat):
-		challenge_count_stat.text = str(_challenge_count)
-	if challenge_time_stat != null and is_instance_valid(challenge_time_stat):
-		challenge_time_stat.text = _challenge_clock_text(_challenge_time_max)
-	if challenge_reward_label != null and is_instance_valid(challenge_reward_label):
-		challenge_reward_label.text = "Great cooking earns a better tip"
-	if challenge_overlay != null and is_instance_valid(challenge_overlay):
-		challenge_overlay.visible = true
 	_play_challenge_song()
-	_mp_send_challenge_state()
+	_accept_challenge()
 
 
 func _accept_challenge() -> void:
@@ -63413,6 +63395,9 @@ func _update_challenge(delta: float) -> void:
 	if mp_enabled and not NetManager.is_host():
 		return
 	if _challenge_phase == "active":
+		if is_instance_valid(_challenge_customer) and not bool(_challenge_customer.get_meta("challenge_clock_started",false)):
+			if not _challenge_customer.is_waiting:return
+			_challenge_customer.set_meta("challenge_clock_started",true)
 		_challenge_time_left = maxf(0.0, _challenge_time_left - delta)
 		_update_challenge_hud()
 		_refresh_challenge_ticket()
@@ -63429,7 +63414,7 @@ func _update_challenge(delta: float) -> void:
 		return
 	if service_window_closed or _bts_day_intro_active or _location_relocate_busy:
 		return
-	if day_time <= challenge_time_small:
+	if day_time <= 100.0:
 		return
 	_challenge_roll_timer -= delta
 	if _challenge_roll_timer > 0.0:
@@ -63633,7 +63618,7 @@ func _spawn_customer(grisaldi_referral: bool = false) -> void:
 		custom_preset = CustomerScript.take_next_saved_character_preset()
 		if grisaldi_referral:custom_preset["grisaldi_referral"]=true
 		elif not tutorial_mode and order.has("patty") and is_instance_valid(_grubbah) and _grubbah.state.is_empty() and randf()<.18:
-			custom_preset["takeout_count"]=randi_range(2,3)
+			custom_preset["takeout_count"]=randi_range(1,4)
 			order.erase("icecream")
 	if mp_enabled:
 		if not NetManager.is_host() and not _mp_applying:
@@ -63705,7 +63690,7 @@ func _spawn_customer_local(
 		_mp_customer_net_ids[c.get_instance_id()] = net_id
 	customers_root.add_child(c)
 	customers.append(c)
-	if int(custom_preset.get("takeout_count",0))>=2 and is_instance_valid(_grubbah):
+	if int(custom_preset.get("takeout_count",0))>=1 and is_instance_valid(_grubbah):
 		c.set_meta("mobile_order",true)
 		c.set_meta("takeout_order",true)
 		c.patience=99999;c.patience_max=99999

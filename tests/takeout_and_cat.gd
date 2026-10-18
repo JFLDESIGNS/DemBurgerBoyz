@@ -88,9 +88,12 @@ func run():
  person.is_waiting=true;game.customers.append(person)
  mobile.begin_takeout(person,3)
  assert(mobile.ticket_owner==person and mobile.state.burger_count==3)
- assert(mobile.state.base==preload("res://scripts/game_data.gd").order_value(recipe)*3)
+ var expected_price=preload("res://scripts/game_data.gd").order_value(mobile.state.takeout_sides)
+ for item in mobile.state.recipes:expected_price+=preload("res://scripts/game_data.gd").order_value(item)
+ assert(mobile.state.base==expected_price)
  mobile.state.burgers_packed=1;mobile.set_phase("bagging");mobile.age=2
  assert(not mobile.try_seal_bag() and mobile.state.phase=="paper","One burger cannot seal a three-burger order")
+ assert(Array(person.order)==Array(mobile.state.recipes[1]+mobile.state.takeout_sides),"Ticket advances to the next burger recipe")
  mobile.state.burgers_packed=3;mobile.set_phase("bagging");mobile.age=2
  assert(mobile.try_seal_bag() and mobile.state.phase=="sealed")
  mobile.update_visuals(0)
@@ -98,6 +101,9 @@ func run():
  var before_money=game.money
  mobile.pay_order();var after_money=game.money;mobile.pay_order()
  assert(after_money>before_money and game.money==after_money,"Takeout pays once")
+ for burger_count in [1,4]:
+  mobile.state={};mobile.begin_takeout(person,burger_count)
+  assert(mobile.state.recipes.size()==burger_count and mobile.state.burger_count==burger_count)
  # The mail cat must have a full walking clearance before the customer passes it.
  var mail=Node3D.new();game.add_child(mail)
  var cat=Node3D.new();mail.add_child(cat)

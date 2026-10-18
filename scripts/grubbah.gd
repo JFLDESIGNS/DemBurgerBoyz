@@ -309,6 +309,7 @@ func try_seal_bag(peer: int = 0) -> bool:
   if peer>0:notice("Burger going in!",peer)
   return false
  if bool(state.get("takeout",false)) and int(state.get("burgers_packed",0))<int(state.get("burger_count",1)):
+  state["items"]=state.recipes[int(state.burgers_packed)]+state.get("takeout_sides",[])
   set_phase("paper");return false
  pack_ready_sides()
  for id in required_sides():
@@ -468,7 +469,7 @@ func pay_order() -> void:
  game._achievement_event("orders");game._achievement_event("earnings",base+tip)
  game.order_history_revision+=1
  state["sale_number"]=game.order_history_revision
- game.order_history.append({"number":game.order_history_revision,"day":game.day,"items":("Takeout " if bool(state.get("takeout",false)) else "Grubbah ")+display_number()+" · "+", ".join(state.items),"sale":base,"tip":tip,"cost":cost,"profit":base+tip-cost,"perfect":bool(state.get("recipe_perfect",true)) and float(state.quality)>=1,"photo":state.get("photo",PackedByteArray())})
+ game.order_history.append({"number":game.order_history_revision,"day":game.day,"items":("Takeout " if bool(state.get("takeout",false)) else "Grubbah ")+display_number()+" · "+", ".join(state.get("all_ordered_items",state.items)),"sale":base,"tip":tip,"cost":cost,"profit":base+tip-cost,"perfect":bool(state.get("recipe_perfect",true)) and float(state.quality)>=1,"photo":state.get("photo",PackedByteArray())})
  if game.order_history.size()>100:game.order_history.pop_front()
  game._show_order_profit(base+tip,cost);game._update_hud()
  if is_instance_valid(game._order_insights):game._order_insights.refresh()
@@ -938,10 +939,21 @@ func _cat_blocks_pickup() -> bool:
 func begin_takeout(person: Node3D, count: int) -> void:
  if not host() or not state.is_empty():return
  takeout_customer=person
+ count=clampi(count,1,4)
  var items: Array=Array(person.order)
- # Sides are packed once for the whole bag; each burger uses the same ticket recipe.
- var burger: Array=items.filter(func(id):return not DATA.is_soda_item(str(id)) and id!="fries")
- state={"number":next_number,"items":items,"phase":"accepted","selected":false,"takeout":true,"customer_id":game._customer_net_id(person),"burger_count":count,"burgers_packed":0,"base":DATA.order_value(burger)*count+DATA.order_value(items)-DATA.order_value(burger),"paid":false,"quality":1.0,"driver_preset":person.get_custom_character_preset(),"driver_skin":0,"car_style":0}
+ var sides: Array=items.filter(func(id):return DATA.is_side_item(str(id)) and id!="icecream")
+ if sides.is_empty():
+  if game._owns_fryer_machine() and randf()<.5:sides.append("fries")
+  if game._owns_soda_machine() and randf()<.5:sides.append(DATA.random_soda_order_id())
+ var burger: Array=items.filter(func(id):return not DATA.is_side_item(str(id)))
+ var recipes: Array=[]
+ var all_items: Array=sides.duplicate()
+ var base: int=DATA.order_value(sides)
+ var mixed: bool=count>1 and randf()<.65
+ for i in count:
+  var recipe: Array=Array(DATA.generate_order(game.difficulty,false,false,false)) if mixed and i>0 else burger.duplicate()
+  recipes.append(recipe);all_items.append_array(recipe);base+=DATA.order_value(recipe)
+ state={"number":next_number,"items":recipes[0]+sides,"recipes":recipes,"takeout_sides":sides,"all_ordered_items":all_items,"phase":"accepted","selected":false,"takeout":true,"customer_id":game._customer_net_id(person),"burger_count":count,"burgers_packed":0,"base":base,"paid":false,"quality":1.0,"driver_preset":person.get_custom_character_preset(),"driver_skin":0,"car_style":0}
  next_number+=1;age=0;publish()
 
 func sync_takeout_ticket() -> void:
@@ -954,6 +966,11 @@ func sync_takeout_ticket() -> void:
  if not is_instance_valid(takeout_customer):takeout_customer=game._customer_by_net_id(int(state.get("customer_id",-1)))
  if not is_instance_valid(takeout_customer):return
  ticket_owner=takeout_customer
+ if Array(ticket_owner.order)!=Array(state.items):
+  var selected: bool=game.selected_customer==ticket_owner
+  if game.tickets.has(ticket_owner):game._remove_ticket(ticket_owner)
+  ticket_owner.order.assign(state.items)
+  if selected:game.selected_customer=ticket_owner
  var phase: String=str(state.phase)
  ticket_owner.set_meta("mobile_order",true);ticket_owner.set_meta("takeout_order",true)
  if phase in ["sealed","takeout_paid","takeout_leave"]:
