@@ -1758,7 +1758,7 @@ var grill_roomba_retry_block_slot: int = -1
 var grill_roomba_retry_block_t: float = 0.0
 const ROOMBA_RADIUS := 0.098
 const ROOMBA_HEIGHT := 0.036
-const ROOMBA_SIT_Y := 0.071
+const ROOMBA_SIT_Y := 0.0456
 const ROOMBA_SPEED := 0.18
 const ROOMBA_SEEK_SPEED := 0.22
 const ROOMBA_TURN_RATE := 2.65
@@ -18726,7 +18726,7 @@ func _update_held_grill_roomba(delta: float) -> void:
 
 
 func _roomba_home_target() -> Vector3:
-	return Vector3(roomba_home_pos.x, roomba_home_pos.y, roomba_home_pos.z)
+	return Vector3(roomba_home_pos.x, roomba_home_pos.y - 0.0254, roomba_home_pos.z)
 
 
 func _roomba_clear_active_work(drop_patty: bool = true) -> void:
@@ -71625,6 +71625,7 @@ func _play_serve_fly_to_mouth(
 	var reject_burger := wrong_recipe or (not tutorial_mode and bad_burger and randf() >= 0.25)
 	if replicated_rejection >= 0:
 		reject_burger = replicated_rejection == 1
+	if reject_burger:customer.set_meta("wrong_order_exit",true)
 	var preview: Control = st.get("preview", null)
 
 	var fly_root := _acquire_serve_fly_root()
@@ -71930,10 +71931,6 @@ func _play_serve_fly_to_mouth(
 			stack.hide()
 			if not mp_enabled or NetManager.is_host():
 				_physical_garbage_react()
-				if is_instance_valid(customer) and randf()<.5:
-					customer._eating=false
-					customer._burger_eat_phase=""
-					_request_truck_smack(customer)
 		)
 		tw.tween_interval(1.15)
 		tw.tween_callback(finish_serve)
@@ -81734,6 +81731,7 @@ func _mill_market_layer() -> Node3D:
 func _request_truck_smack(person: Node3D) -> void:
 	if mp_enabled and not NetManager.is_host():return
 	if not is_instance_valid(person) or person.is_leaving or person.is_ragdoll or bool(person.get_meta("truck_smack_busy",false)) or bool(person.get_meta("building_trip",false)):return
+	if bool(person.get_meta("wrong_order_exit",false)):return
 	if _is_grisaldi_guest(person) or person.is_cut_collector or person.is_disguise_cat or person.is_terrorist or bool(person.get_meta("hotdog_boss",false)):return
 	if Time.get_ticks_msec()<int(person.get_meta("truck_smack_cooldown",0)):return
 	person.set_meta("truck_smack_cooldown",Time.get_ticks_msec()+18000)

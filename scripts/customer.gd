@@ -5089,6 +5089,7 @@ func release_serve_completion() -> void:
 
 
 func react_wrong() -> void:
+	set_meta("wrong_order_exit",true)
 	if _bubble:
 		_bubble.visible = false
 	if _bubble_bg:
@@ -5303,6 +5304,7 @@ func say_thanks(duration: float = 1.5) -> void:
 
 
 func _say_departure_thanks() -> bool:
+	if bool(get_meta("wrong_order_exit",false)):return false
 	if bool(get_meta("departure_thanks_checked",false)):return false
 	set_meta("departure_thanks_checked",true)
 	var choice: int=int(get_meta("mp_net_id",-1))

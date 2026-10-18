@@ -1,7 +1,7 @@
 extends RefCounted
 
 static func play(game: Node, customer: Node3D, special: bool) -> void:
-	if not is_instance_valid(customer) or bool(customer.get_meta("cash_sequence_playing",false)):return
+	if not is_instance_valid(customer) or bool(customer.get_meta("cash_sequence_playing",false)) or bool(customer.get_meta("wrong_order_exit",false)):return
 	customer.set_meta("cash_sequence_playing",true)
 	var processing := customer.is_processing()
 	customer.set_process(false)
