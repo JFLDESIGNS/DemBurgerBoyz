@@ -114,6 +114,7 @@ func run():
  game.mail_delivery_truck=mail
  cat.position=Vector3(0,0,person._wait_z())
  person.position=Vector3(-3,person.STAND_Y,person._wait_z())
+ person.target_x=4
  for frame in 180:
   person.position.x+=1.6/60.0
   person.position.z=person._wait_z() # Departure pose resets depth each frame.
@@ -134,7 +135,7 @@ func run():
  assert(person._cat_detour_depth>1.0 and person._anim_state=="walk","Return uses a slower uninterrupted walking pose")
  for frame in 150:person._process(1.0/60.0)
  assert(is_zero_approx(person._cat_detour_depth) and is_equal_approx(person.position.z,person._wait_z()),"Waiting challenge guest returns to the counter")
- cat.show();person.is_waiting=false;person._cat_detour_depth=0
+ cat.show();person.is_waiting=false;person._cat_detour_depth=0;person.target_x=12
  person.position=Vector3(-3.4,person.STAND_Y,person._wait_z())
  for frame in 40:
   var old_x=person.position.x
@@ -143,7 +144,7 @@ func run():
   assert(Vector2(person.position.x-cat.position.x,person.position.z-cat.position.z).length()>=.74,"Running customer must never cross the cat clearance")
  assert(person.position.x>3,"Detour must still let the customer pass")
  person.position=Vector3(cat.position.x,person.STAND_Y,cat.position.z+1.7)
- person._cat_detour_depth=1.7;person.is_waiting=true
+ person._cat_detour_depth=1.7;person.is_waiting=true;person.target_x=cat.position.x
  for frame in 180:person._avoid_visiting_cat(1.0/60.0)
  assert(person.position.z-cat.position.z>.74 and person.position.z-cat.position.z<.91,"Wait close behind the mail cat")
  # Begging cat: meal-side and queue-forward movements must use the same clearance.
@@ -153,6 +154,16 @@ func run():
  game.window_cat=begging
  begging.position=Vector3(0,.69,person.WAIT_Z+.2)
  person.is_leaving=false;person.is_waiting=true
+ person.position=Vector3(1.1,person.STAND_Y,person.WAIT_Z)
+ person.target_x=1.1;person._cat_detour_depth=0;person._meal_walk_active=false
+ for frame in 120:person._avoid_visiting_cat(1.0/60.0)
+ assert(is_equal_approx(person.position.z,person.WAIT_Z),"Cat beside a waiting customer must not push them backwards")
+ person.position.x=3;person.target_x=1.1
+ for frame in 100:
+  var previous_x=person.position.x
+  person.position.x=move_toward(person.position.x,person.target_x,.03)
+  person._avoid_visiting_cat(1.0/60.0,previous_x)
+ assert(is_equal_approx(person.position.z,person.WAIT_Z),"A route ending beside the cat does not need a detour")
  for direction in [-1.0,1.0]:
   person.position=Vector3(-3.4*direction,person.STAND_Y,person.WAIT_Z)
   person.set_meta("meal_stepping_aside",true)

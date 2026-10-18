@@ -5410,6 +5410,22 @@ func _apply_forward_walk_bobble(delta: float) -> void:
 	_body.position.y = _base_body_y + sin(_bobble_phase) * .025
 	_body.rotation_degrees = Vector3(0, 0, sin(_bobble_phase*.5)*1.4)
 
+func _cat_blocks_walk(obstacle: Node3D, radius: float, previous_x: float) -> bool:
+	var baseline := _wait_z() + (_service_backstep if is_leaving else 0.0)
+	var from_x := previous_x if is_finite(previous_x) else global_position.x
+	var goal_x := LEAVE_OFFSCREEN_X if is_leaving else target_x
+	var moving_sideways := absf(goal_x-from_x) > .05 or absf(global_position.x-from_x) > .001
+	var center := Vector2(obstacle.global_position.x, obstacle.global_position.z)
+	if moving_sideways:
+		var nearest := Geometry2D.get_closest_point_to_segment(center, Vector2(from_x, baseline), Vector2(goal_x, baseline))
+		return nearest.distance_to(center) < radius
+	# Only retain clearance when an existing detour/forward walk would cross the cat.
+	# A cat appearing beside a stationary customer must not push them backwards.
+	if _cat_detour_depth > .01 or _meal_walk_active:
+		var nearest := Geometry2D.get_closest_point_to_segment(center, Vector2(global_position.x, global_position.z), Vector2(goal_x, baseline))
+		return nearest.distance_to(center) < radius
+	return false
+
 func _avoid_visiting_cat(delta: float, previous_x: float = INF) -> void:
 	if mp_host_driven: return
 	var game = get_tree().current_scene
@@ -5423,6 +5439,7 @@ func _avoid_visiting_cat(delta: float, previous_x: float = INF) -> void:
 	for obstacle in cats:
 		if not obstacle.is_visible_in_tree(): continue
 		var radius: float = _cat_walk_clearance(obstacle, cat)
+		if not _cat_blocks_walk(obstacle, radius, previous_x): continue
 		var gap: float = absf(global_position.x-obstacle.global_position.x)
 		if gap < radius+.9 and absf(_wait_z()-obstacle.global_position.z)<radius:
 			var amount: float = 1.0-smoothstep(radius*.7,radius+.9,gap)

@@ -2,12 +2,31 @@ extends SceneTree
 func _initialize():call_deferred("run")
 func run():
  var g=load("res://scenes/main.tscn").instantiate();g.set_script(load("res://tests/challenge_auto_fixture.gd"));root.add_child(g);current_scene=g
- for i in 100:
+ seed(12345)
+ var batches=0
+ var giants=0
+ var ten_patty_stacks=0
+ for i in 200:
   g._pick_challenge_size()
-  assert(g._challenge_count>=5 and g._challenge_count<=10)
-  for recipe in g._challenge_recipes:assert(recipe.count("patty") in [1,2],"Only single or double burgers")
   assert(g._challenge_count==g._challenge_recipes.size())
-  assert(g._challenge_time_max==g._challenge_count*10.0)
+  if g._challenge_count==1:
+   giants+=1
+   var recipe=g._challenge_recipes[0]
+   assert(recipe.count("patty") in [5,10] and recipe.has("cheese"))
+   assert(recipe.size()<=14,"Giant stack fits the build limit")
+   if recipe.count("patty")==10:ten_patty_stacks+=1
+   assert(g._challenge_time_max==recipe.count("patty")*10.0)
+   assert(str(recipe.count("patty")) in g._challenge_intro_text())
+  else:
+   batches+=1
+   assert(g._challenge_count>=5 and g._challenge_count<=10)
+   var doubles=0
+   for recipe in g._challenge_recipes:
+    assert(recipe.count("patty") in [1,2])
+    if recipe.count("patty")==2:doubles+=1
+   assert(doubles in [1,2],"Large batches have only one or two doubles")
+   assert(g._challenge_time_max==g._challenge_count*10.0)
+ assert(batches>0 and giants>0 and ten_patty_stacks>0)
  g._build_challenge_ui()
  g._show_challenge_offer()
  assert(g._challenge_phase=="offer" and g.spawned==0 and g.challenge_overlay.visible)
@@ -24,5 +43,5 @@ func run():
  g._apply_next_challenge_recipe()
  assert(c.order.count("patty")==2 and c.order.has("cheese"),"Next burger gets its own recipe")
  assert(g.tickets.has(c),"Updated recipe has a visible ticket")
- print("CHALLENGE_AUTO_START_SINGLE_DOUBLE_OK")
+ print("CHALLENGE_BATCH_AND_GIANT_STACK_OK")
  quit()

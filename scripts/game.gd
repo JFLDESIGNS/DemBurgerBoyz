@@ -63231,16 +63231,36 @@ func _refresh_challenge_ticket(customer: Node3D = null) -> void:
 
 
 func _pick_challenge_size() -> void:
-	_challenge_count=randi_range(5,10)
 	_challenge_recipes=[]
-	for i in _challenge_count:
-		var recipe: Array=Array(GameDataScript.generate_challenge_order())
-		if randf()<.4:recipe.insert(2,"patty")
+	var giant_stack := randf() < .25
+	var workload := 0
+	if giant_stack:
+		var patty_count := 5 if randf() < .5 else 10
+		var recipe: Array = ["bun_bottom"]
+		for i in patty_count: recipe.append("patty")
+		recipe.append("cheese")
+		recipe.append("bun_top")
 		_challenge_recipes.append(recipe)
-	_challenge_time_max=float(_challenge_count)*10.0
-	_challenge_bonus_tip=challenge_tip_large if _challenge_count>=8 else challenge_tip_small
+		_challenge_count = 1
+		workload = patty_count
+	else:
+		_challenge_count=randi_range(5,10)
+		var doubles_left := randi_range(1,2)
+		for i in _challenge_count:
+			var recipe: Array=Array(GameDataScript.generate_challenge_order())
+			if i < doubles_left: recipe.insert(2,"patty")
+			_challenge_recipes.append(recipe)
+		_challenge_recipes.shuffle()
+		workload = _challenge_count
+	_challenge_time_max=float(workload)*10.0
+	_challenge_bonus_tip=challenge_tip_large if workload>=8 else challenge_tip_small
 	_challenge_remaining = _challenge_count
 	_challenge_time_left = _challenge_time_max
+
+func _challenge_intro_text() -> String:
+	if _challenge_count == 1 and not _challenge_recipes.is_empty():
+		return "One giant burger: %d patties and cheese! Starting in 3 seconds!" % _challenge_recipes[0].count("patty")
+	return "Mostly singles, with 1 or 2 doubles. Starting in 3 seconds!"
 
 
 func _challenge_offer_body() -> String:
@@ -63268,7 +63288,7 @@ func _show_challenge_offer() -> void:
 	_challenge_offer_id += 1
 	_challenge_decision_pending = false
 	_challenge_phase = "offer"
-	if is_instance_valid(challenge_body_label):challenge_body_label.text="Single and double burgers. Starting in 3 seconds!"
+	if is_instance_valid(challenge_body_label):challenge_body_label.text=_challenge_intro_text()
 	if is_instance_valid(challenge_count_stat):challenge_count_stat.text=str(_challenge_count)
 	if is_instance_valid(challenge_time_stat):challenge_time_stat.text=_challenge_clock_text(_challenge_time_max)
 	if is_instance_valid(challenge_reward_label):challenge_reward_label.text="Great cooking earns a better tip"
@@ -63348,7 +63368,7 @@ func mp_challenge_state(phase: String, count: int, remaining: int, time_left: fl
 	_apply_next_challenge_recipe()
 	if phase == "offer":
 		if challenge_body_label != null:
-			challenge_body_label.text = "Single and double burgers. Starting in 3 seconds!"
+			challenge_body_label.text = _challenge_intro_text()
 		if challenge_count_stat != null:
 			challenge_count_stat.text = str(_challenge_count)
 		if challenge_time_stat != null:
